@@ -10,6 +10,8 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.6
+  nearby_connections: ^4.3.0
+  permission_handler: ^13.0.1
 
 dev_dependencies:
   flutter_test:

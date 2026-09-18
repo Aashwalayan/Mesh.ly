@@ -2,15 +2,20 @@ import 'package:flutter/material.dart';
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_theme.dart';
 import '../../data/mock_data.dart';
+import '../../services/discovery_service.dart';
+import '../../services/permissions_service.dart';
+import '../../services/service_locator.dart';
 import '../../widgets/contact_tile.dart';
+import '../../widgets/empty_state.dart';
 import '../../widgets/qr_placeholder.dart';
 import '../../widgets/tab_chip.dart';
 
 enum AddContactTab { myQr, scanQr, nearby }
 
-/// The "Add someone" flow: share your own QR, scan a peer's QR, or pick
-/// from nearby mesh users. All three tabs are mock/frontend-only for now —
-/// this is where the real QR + peer-discovery services will plug in later.
+/// The "Add someone" flow: share your own QR, scan a peer's QR, or connect
+/// to someone nearby. My QR and Scan QR are still frontend-only placeholders;
+/// Nearby is wired to real Android Nearby Connections discovery (see
+/// lib/services/) as of the mesh-networking work.
 ///
 /// Used both as a full [Scaffold] screen (pushed from Contacts) and as the
 /// body of a modal bottom sheet (opened from Chats) via [showAddContactSheet].
@@ -273,6 +278,11 @@ class _ScanQrTab extends StatelessWidget {
   }
 }
 
+/// Real-device state for a peer shown in the list: found, connecting,
+/// connected, or failed. Distinct from [MockData]'s old "added" concept —
+/// this now reflects an actual Nearby Connections session, not a local set.
+enum _PeerRowState { found, connecting, connected, failed }
+
 class _NearbyTab extends StatefulWidget {
   const _NearbyTab();
 
@@ -281,36 +291,127 @@ class _NearbyTab extends StatefulWidget {
 }
 
 class _NearbyTabState extends State<_NearbyTab> {
-  final Set<String> _addedMeshIds = <String>{};
+  late final DiscoveryService _discovery;
+
+  final Map<String, DiscoveredPeer> _peers = {};
+  final Map<String, _PeerRowState> _peerStates = {};
+
+  bool _permissionsGranted = false;
+  bool _checkingPermissions = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _discovery = createDiscoveryService();
+    _discovery.onPeerFound.listen((peer) {
+      if (!mounted) return;
+      setState(() {
+        _peers[peer.endpointId] = peer;
+        _peerStates.putIfAbsent(peer.endpointId, () => _PeerRowState.found);
+      });
+    });
+    _discovery.onPeerLost.listen((endpointId) {
+      if (!mounted) return;
+      setState(() {
+        _peers.remove(endpointId);
+        _peerStates.remove(endpointId);
+      });
+    });
+    _discovery.onConnectionStateChanged.listen((event) {
+      if (!mounted) return;
+      final (endpointId, state) = event;
+      setState(() {
+        _peerStates[endpointId] = switch (state) {
+          PeerConnectionState.connecting => _PeerRowState.connecting,
+          PeerConnectionState.connected => _PeerRowState.connected,
+          PeerConnectionState.failed => _PeerRowState.failed,
+          PeerConnectionState.disconnected => _PeerRowState.found,
+        };
+      });
+    });
+    _startDiscovery();
+  }
+
+  Future<void> _startDiscovery() async {
+    final granted = await PermissionsService.requestAll();
+    if (!mounted) return;
+    setState(() {
+      _permissionsGranted = granted;
+      _checkingPermissions = false;
+    });
+    if (granted) {
+      await _discovery.start(MockData.currentUser.username);
+    }
+  }
+
+  @override
+  void dispose() {
+    _discovery.stop();
+    _discovery.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final nearbyUsers = MockData.nearbyContacts;
+    if (_checkingPermissions) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (!_permissionsGranted) {
+      return const EmptyState(
+        icon: Icons.bluetooth_disabled_rounded,
+        message:
+            'Bluetooth and location/nearby-device permissions are needed '
+            'to find people nearby. Grant them in system settings and '
+            'reopen this tab.',
+      );
+    }
+
+    final nearbyPeers = _peers.values.toList();
+
+    if (nearbyPeers.isEmpty) {
+      return const EmptyState(
+        icon: Icons.wifi_tethering_rounded,
+        message:
+            'Looking for nearby Mesh.ly devices...\n'
+            'Make sure Bluetooth and Wi-Fi are both turned on.',
+      );
+    }
 
     return ListView.separated(
       key: const ValueKey('nearby-tab'),
-      itemCount: nearbyUsers.length,
-      separatorBuilder: (_, index) => const SizedBox(height: 10),
+      itemCount: nearbyPeers.length,
+      separatorBuilder: (_, i) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
-        final user = nearbyUsers[index];
-        final isAdded = _addedMeshIds.contains(user.meshId);
+        final peer = nearbyPeers[index];
+        final state = _peerStates[peer.endpointId] ?? _PeerRowState.found;
 
         return ContactTile(
-          name: user.username,
-          subtitle: 'Nearby',
+          name: peer.name,
+          subtitle: switch (state) {
+            _PeerRowState.found => 'Nearby',
+            _PeerRowState.connecting => 'Connecting...',
+            _PeerRowState.connected => 'Connected',
+            _PeerRowState.failed => 'Connection failed — tap to retry',
+          },
           trailing: FilledButton.tonal(
-            onPressed: isAdded
+            onPressed: state == _PeerRowState.connected
                 ? null
-                : () => setState(() => _addedMeshIds.add(user.meshId)),
+                : () => _discovery.connectTo(peer.endpointId),
             style: FilledButton.styleFrom(
-              backgroundColor: isAdded
+              backgroundColor: state == _PeerRowState.connected
                   ? const Color(0xFFE7EFED)
                   : AppColors.accentSoft,
-              foregroundColor: isAdded
+              foregroundColor: state == _PeerRowState.connected
                   ? AppColors.textFaded
                   : AppColors.accentDark,
             ),
-            child: Text(isAdded ? 'Added' : 'Add'),
+            child: Text(switch (state) {
+              _PeerRowState.found => 'Add',
+              _PeerRowState.connecting => 'Connecting',
+              _PeerRowState.connected => 'Connected',
+              _PeerRowState.failed => 'Retry',
+            }),
           ),
         );
       },

@@ -67,8 +67,7 @@ Future<void> showAddContactSheet(BuildContext context) {
                 children: [
                   Text(
                     'Add someone',
-                    style: Theme.of(context).textTheme.headlineSmall
-                        ?.copyWith(
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                           fontWeight: FontWeight.w800,
                           color: AppColors.textPrimary,
                         ),
@@ -304,6 +303,9 @@ class _NearbyTabState extends State<_NearbyTab> {
     super.initState();
     _discovery = createDiscoveryService();
     _discovery.onPeerFound.listen((peer) {
+      // ignore: avoid_print
+      print(
+          'NearbyTab: stream received peer (id=${peer.endpointId}, name=${peer.name})');
       if (!mounted) return;
       setState(() {
         _peers[peer.endpointId] = peer;
@@ -334,13 +336,20 @@ class _NearbyTabState extends State<_NearbyTab> {
 
   Future<void> _startDiscovery() async {
     final granted = await PermissionsService.requestAll();
+    // ignore: avoid_print
+    print('NearbyTab: permissions granted=$granted');
     if (!mounted) return;
     setState(() {
       _permissionsGranted = granted;
       _checkingPermissions = false;
     });
     if (granted) {
-      await _discovery.start(MockData.currentUser.username);
+      try {
+        await _discovery.start(MockData.currentUser.username);
+      } catch (error, stackTrace) {
+        // ignore: avoid_print
+        print('NearbyTab: discovery failed: $error\n$stackTrace');
+      }
     }
   }
 
@@ -360,8 +369,7 @@ class _NearbyTabState extends State<_NearbyTab> {
     if (!_permissionsGranted) {
       return const EmptyState(
         icon: Icons.bluetooth_disabled_rounded,
-        message:
-            'Bluetooth and location/nearby-device permissions are needed '
+        message: 'Bluetooth and location/nearby-device permissions are needed '
             'to find people nearby. Grant them in system settings and '
             'reopen this tab.',
       );
@@ -372,8 +380,7 @@ class _NearbyTabState extends State<_NearbyTab> {
     if (nearbyPeers.isEmpty) {
       return const EmptyState(
         icon: Icons.wifi_tethering_rounded,
-        message:
-            'Looking for nearby Mesh.ly devices...\n'
+        message: 'Looking for nearby Mesh.ly devices...\n'
             'Make sure Bluetooth and Wi-Fi are both turned on.',
       );
     }

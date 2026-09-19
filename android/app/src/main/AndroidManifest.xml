@@ -7,7 +7,10 @@
     <uses-permission android:maxSdkVersion="30" android:name="android.permission.BLUETOOTH" />
     <uses-permission android:maxSdkVersion="30" android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:maxSdkVersion="28" android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:minSdkVersion="29" android:maxSdkVersion="31" android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- PermissionsService requests location on every supported Android
+         version. Do not cap this at API 31: on Android 12+ that made the
+         request resolve to denied and prevented discovery from starting. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:minSdkVersion="31" android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:minSdkVersion="31" android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:minSdkVersion="31" android:name="android.permission.BLUETOOTH_SCAN" />

@@ -41,8 +41,7 @@ class NearbyDiscoveryService implements DiscoveryService {
   final _peerLostController = StreamController<String>.broadcast();
   final _connectionStateController =
       StreamController<(String, PeerConnectionState)>.broadcast();
-  final _payloadController =
-      StreamController<(String, Uint8List)>.broadcast();
+  final _payloadController = StreamController<(String, Uint8List)>.broadcast();
 
   @override
   Stream<DiscoveredPeer> get onPeerFound => _peerFoundController.stream;
@@ -61,27 +60,59 @@ class NearbyDiscoveryService implements DiscoveryService {
   @override
   Future<void> start(String myDisplayName) async {
     _myDisplayName = myDisplayName;
-
-    await Nearby().startAdvertising(
-      myDisplayName,
-      _strategy,
-      serviceId: serviceId,
-      onConnectionInitiated: _onConnectionInitiated,
-      onConnectionResult: _onConnectionResult,
-      onDisconnected: _onDisconnected,
+    // ignore: avoid_print
+    print(
+      'NearbyDiscoveryService: starting P2P_CLUSTER '
+      '(name=$myDisplayName, serviceId=$serviceId)',
     );
 
-    await Nearby().startDiscovery(
-      myDisplayName,
-      _strategy,
-      serviceId: serviceId,
-      onEndpointFound: (id, name, foundServiceId) {
-        _peerFoundController.add(DiscoveredPeer(endpointId: id, name: name));
-      },
-      onEndpointLost: (id) {
-        if (id != null) _peerLostController.add(id);
-      },
-    );
+    try {
+      final advertisingStarted = await Nearby().startAdvertising(
+        myDisplayName,
+        _strategy,
+        serviceId: serviceId,
+        onConnectionInitiated: _onConnectionInitiated,
+        onConnectionResult: _onConnectionResult,
+        onDisconnected: _onDisconnected,
+      );
+      // `nearby_connections` 4.3.0 reports a native failure as `false`,
+      // rather than necessarily throwing a PlatformException.
+      if (!advertisingStarted) {
+        throw StateError('Nearby advertising returned false');
+      }
+      // ignore: avoid_print
+      print('NearbyDiscoveryService: advertising started');
+
+      final discoveryStarted = await Nearby().startDiscovery(
+        myDisplayName,
+        _strategy,
+        serviceId: serviceId,
+        onEndpointFound: (id, name, foundServiceId) {
+          // ignore: avoid_print
+          print(
+            'NearbyDiscoveryService: endpoint found '
+            '(id=$id, name=$name, serviceId=$foundServiceId)',
+          );
+          _peerFoundController.add(DiscoveredPeer(endpointId: id, name: name));
+        },
+        onEndpointLost: (id) {
+          // ignore: avoid_print
+          print('NearbyDiscoveryService: endpoint lost (id=$id)');
+          if (id != null) _peerLostController.add(id);
+        },
+      );
+      if (!discoveryStarted) {
+        throw StateError('Nearby discovery returned false');
+      }
+      // ignore: avoid_print
+      print('NearbyDiscoveryService: discovery started');
+    } catch (error, stackTrace) {
+      // Surface this instead of failing silently — e.g. "unable to start
+      // bluetooth" or "insufficient permissions" per the plugin's own docs.
+      // ignore: avoid_print
+      print('NearbyDiscoveryService.start failed: $error\n$stackTrace');
+      rethrow;
+    }
   }
 
   @override
@@ -110,6 +141,8 @@ class NearbyDiscoveryService implements DiscoveryService {
   }
 
   void _onConnectionInitiated(String id, ConnectionInfo info) {
+    // ignore: avoid_print
+    print('NearbyDiscoveryService: connection initiated (id=$id)');
     // Auto-accept: there's no incoming-request UI yet (see class doc).
     Nearby().acceptConnection(
       id,
@@ -126,6 +159,8 @@ class NearbyDiscoveryService implements DiscoveryService {
   }
 
   void _onConnectionResult(String id, Status status) {
+    // ignore: avoid_print
+    print('NearbyDiscoveryService: connection result (id=$id, status=$status)');
     // We can only confirm Status.ERROR's exact name from the plugin's
     // source; treat anything else as success rather than guess at other
     // member names (e.g. a rejection) that might not compile.
@@ -136,6 +171,8 @@ class NearbyDiscoveryService implements DiscoveryService {
   }
 
   void _onDisconnected(String id) {
+    // ignore: avoid_print
+    print('NearbyDiscoveryService: disconnected (id=$id)');
     _connectionStateController.add((id, PeerConnectionState.disconnected));
   }
 

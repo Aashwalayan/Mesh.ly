@@ -32,6 +32,8 @@ class PermissionsService {
       Permission.nearbyWifiDevices,
     ].request();
 
+    // ignore: avoid_print
+    print('PermissionsService: $statuses');
     return statuses.values.every(
       (status) => status.isGranted || status.isLimited,
     );

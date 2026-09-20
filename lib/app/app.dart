@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/identity_repository.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/onboarding/onboarding_screen.dart';
+import '../services/mesh_router.dart';
 import 'theme/app_theme.dart';
 
 /// Root widget: sets up the MaterialApp shell, theme, and the startup gate
@@ -25,6 +26,11 @@ class MeshlyApp extends StatelessWidget {
 /// disk, then shows [OnboardingScreen] (no identity yet) or [HomeScreen]
 /// (identity exists) — and keeps listening, so finishing onboarding swaps
 /// straight to [HomeScreen] with no separate navigation call needed.
+///
+/// Also starts [MeshRouter] as soon as an identity exists — the mesh runs
+/// for the whole app session from here on, not scoped to any one screen.
+/// [MeshRouter.start] is safe to call more than once (it no-ops after the
+/// first call), so this can fire on every rebuild without issue.
 class AppStartupGate extends StatefulWidget {
   const AppStartupGate({super.key});
 
@@ -52,9 +58,12 @@ class _AppStartupGateState extends State<AppStartupGate> {
           );
         }
 
-        return identity.hasIdentity
-            ? const HomeScreen()
-            : const OnboardingScreen();
+        if (identity.hasIdentity) {
+          MeshRouter.instance.start();
+          return const HomeScreen();
+        }
+
+        return const OnboardingScreen();
       },
     );
   }

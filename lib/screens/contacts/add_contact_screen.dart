@@ -7,15 +7,13 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_theme.dart';
 import '../../data/contacts_repository.dart';
-import '../../data/mock_data.dart';
+import '../../data/identity_repository.dart';
 import '../../models/contact.dart';
 import '../../services/discovery_service.dart';
-import '../../services/permissions_service.dart';
-import '../../services/service_locator.dart';
+import '../../services/mesh_router.dart';
 import '../../widgets/contact_tile.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/tab_chip.dart';
-import '../../data/identity_repository.dart';
 
 enum AddContactTab { myQr, scanQr, nearby }
 
@@ -393,163 +391,143 @@ class _ScanQrTabState extends State<_ScanQrTab> {
   }
 }
 
-/// Real-device state for a peer shown in the list: found, connecting,
-/// connected, or failed. Distinct from [MockData]'s old "added" concept —
-/// this now reflects an actual Nearby Connections session, not a local set.
-enum _PeerRowState { found, connecting, connected, failed }
-
-class _NearbyTab extends StatefulWidget {
+class _NearbyTab extends StatelessWidget {
   const _NearbyTab();
 
-  @override
-  State<_NearbyTab> createState() => _NearbyTabState();
-}
-
-class _NearbyTabState extends State<_NearbyTab> {
-  late final DiscoveryService _discovery;
-
-  final Map<String, DiscoveredPeer> _peers = {};
-  final Map<String, _PeerRowState> _peerStates = {};
-
-  bool _permissionsGranted = false;
-  bool _checkingPermissions = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _discovery = createDiscoveryService();
-    _discovery.onPeerFound.listen((peer) {
-      // ignore: avoid_print
-      print(
-          'NearbyTab: stream received peer (id=${peer.endpointId}, name=${peer.name})');
-      if (!mounted) return;
-      setState(() {
-        _peers[peer.endpointId] = peer;
-        _peerStates.putIfAbsent(peer.endpointId, () => _PeerRowState.found);
-      });
-    });
-    _discovery.onPeerLost.listen((endpointId) {
-      if (!mounted) return;
-      setState(() {
-        _peers.remove(endpointId);
-        _peerStates.remove(endpointId);
-      });
-    });
-    _discovery.onConnectionStateChanged.listen((event) {
-      if (!mounted) return;
-      final (endpointId, state) = event;
-      setState(() {
-        _peerStates[endpointId] = switch (state) {
-          PeerConnectionState.connecting => _PeerRowState.connecting,
-          PeerConnectionState.connected => _PeerRowState.connected,
-          PeerConnectionState.failed => _PeerRowState.failed,
-          PeerConnectionState.disconnected => _PeerRowState.found,
-        };
-      });
-    });
-    _startDiscovery();
-  }
-
-  Future<void> _startDiscovery() async {
-    final granted = await PermissionsService.requestAll();
-    // ignore: avoid_print
-    print('NearbyTab: permissions granted=$granted');
-    if (!mounted) return;
-    setState(() {
-      _permissionsGranted = granted;
-      _checkingPermissions = false;
-    });
-    if (granted) {
-      try {
-        await _discovery.start(IdentityRepository.instance.user!.username);
-      } catch (error, stackTrace) {
-        // ignore: avoid_print
-        print('NearbyTab: discovery failed: $error\n$stackTrace');
-      }
+  String _stateLabel(PeerConnectionState? state) {
+    switch (state) {
+      case PeerConnectionState.connecting:
+        return 'Connecting';
+      case PeerConnectionState.connected:
+        return 'Connected';
+      case PeerConnectionState.failed:
+        return 'Failed';
+      case PeerConnectionState.disconnected:
+        return 'Disconnected';
+      default:
+        return 'Discovered';
     }
   }
 
-  Future<void> _sendTestMessage(String endpointId) async {
-    try {
-      await _discovery.sendTestMessage(
-        endpointId,
-        senderId: IdentityRepository.instance.user!.meshId,
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not send test message: $error')),
-      );
+  IconData _stateIcon(PeerConnectionState? state) {
+    switch (state) {
+      case PeerConnectionState.connected:
+        return Icons.check_circle_rounded;
+      case PeerConnectionState.connecting:
+        return Icons.sync_rounded;
+      case PeerConnectionState.failed:
+        return Icons.error_outline_rounded;
+      case PeerConnectionState.disconnected:
+        return Icons.link_off_rounded;
+      default:
+        return Icons.devices_other_rounded;
     }
   }
 
-  @override
-  void dispose() {
-    _discovery.stop();
-    _discovery.dispose();
-    super.dispose();
+  Color _stateColor(PeerConnectionState? state) {
+    switch (state) {
+      case PeerConnectionState.connected:
+        return AppColors.accent;
+      case PeerConnectionState.failed:
+        return Colors.redAccent;
+      case PeerConnectionState.connecting:
+      case PeerConnectionState.disconnected:
+      default:
+        return AppColors.textSecondary;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_checkingPermissions) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    return ListenableBuilder(
+      listenable: MeshRouter.instance,
+      builder: (context, _) {
+        final router = MeshRouter.instance;
+        final peers = router.peers;
+        final peerStates = router.peerStates;
 
-    if (!_permissionsGranted) {
-      return const EmptyState(
-        icon: Icons.bluetooth_disabled_rounded,
-        message: 'Bluetooth and location/nearby-device permissions are needed '
-            'to find people nearby. Grant them in system settings and '
-            'reopen this tab.',
-      );
-    }
+        if (peers.isEmpty) {
+          return const EmptyState(
+            icon: Icons.radar_rounded,
+            message: 'No Mesh.ly devices nearby.',
+          );
+        }
 
-    final nearbyPeers = _peers.values.toList();
+        return ListView.separated(
+          padding: const EdgeInsets.only(bottom: 20),
+          itemCount: peers.length,
+          separatorBuilder: (_, i) => const SizedBox(height: 8),
+          itemBuilder: (context, index) {
+            final peer = peers.values.elementAt(index);
+            final state = peerStates[peer.endpointId];
 
-    if (nearbyPeers.isEmpty) {
-      return const EmptyState(
-        icon: Icons.wifi_tethering_rounded,
-        message: 'Looking for nearby Mesh.ly devices...\n'
-            'Make sure Bluetooth and Wi-Fi are both turned on.',
-      );
-    }
-
-    return ListView.separated(
-      key: const ValueKey('nearby-tab'),
-      itemCount: nearbyPeers.length,
-      separatorBuilder: (_, i) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        final peer = nearbyPeers[index];
-        final state = _peerStates[peer.endpointId] ?? _PeerRowState.found;
-
-        return ContactTile(
-          name: peer.name,
-          subtitle: switch (state) {
-            _PeerRowState.found => 'Nearby',
-            _PeerRowState.connecting => 'Connecting...',
-            _PeerRowState.connected => 'Connected',
-            _PeerRowState.failed => 'Connection failed — tap to retry',
+            return Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(AppRadii.panel),
+                border: Border.all(
+                  color: AppColors.divider,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: AppColors.accentSoft,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(
+                      Icons.devices_rounded,
+                      color: AppColors.accentDark,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          peer.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textPrimary,
+                              ),
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Icon(
+                              _stateIcon(state),
+                              size: 16,
+                              color: _stateColor(state),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _stateLabel(state),
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                    color: _stateColor(state),
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
           },
-          trailing: FilledButton.tonal(
-            onPressed: state == _PeerRowState.connected
-                ? () => _sendTestMessage(peer.endpointId)
-                : () => _discovery.connectTo(peer.endpointId),
-            style: FilledButton.styleFrom(
-              backgroundColor: state == _PeerRowState.connected
-                  ? const Color(0xFFE7EFED)
-                  : AppColors.accentSoft,
-              foregroundColor: state == _PeerRowState.connected
-                  ? AppColors.textFaded
-                  : AppColors.accentDark,
-            ),
-            child: Text(switch (state) {
-              _PeerRowState.found => 'Add',
-              _PeerRowState.connecting => 'Connecting',
-              _PeerRowState.connected => 'Send test',
-              _PeerRowState.failed => 'Retry',
-            }),
-          ),
         );
       },
     );

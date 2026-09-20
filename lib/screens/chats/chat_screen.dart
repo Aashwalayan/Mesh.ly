@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_theme.dart';
-import '../../data/mock_data.dart';
+import '../../data/identity_repository.dart';
+import '../../data/messages_repository.dart';
 import '../../models/contact.dart';
-import '../../models/message.dart';
+import '../../services/mesh_router.dart';
 import '../../widgets/message_bubble.dart';
 import '../../widgets/user_avatar.dart';
 
-/// A single conversation. Messages are seeded from [MockData] and sending
-/// only updates local widget state — there is no real networking yet, this
-/// is just where it will plug in later.
+/// A single conversation. Messages are sent via [MeshRouter] (which floods
+/// them across the mesh toward [contact]'s Mesh ID) and read from
+/// [MessagesRepository], which [MeshRouter] fills in as messages are sent
+/// or arrive. Wrapped in a [ListenableBuilder] so an incoming message shows
+/// up here immediately if this screen is already open when it arrives.
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key, required this.contact});
 
@@ -22,13 +25,6 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  late final List<Message> _thread;
-
-  @override
-  void initState() {
-    super.initState();
-    _thread = List.of(MockData.messagesWith(widget.contact.id));
-  }
 
   @override
   void dispose() {
@@ -41,18 +37,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _inputController.text.trim();
     if (text.isEmpty) return;
 
-    setState(() {
-      _thread.add(
-        Message(
-          id: 'local-${DateTime.now().microsecondsSinceEpoch}',
-          senderId: MockData.currentUserId,
-          receiverId: widget.contact.id,
-          content: text,
-          timestamp: DateTime.now(),
-          isRead: true,
-        ),
-      );
-    });
+    MeshRouter.instance.sendChatMessage(widget.contact.meshId, text);
 
     _inputController.clear();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -67,6 +52,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final myMeshId = IdentityRepository.instance.user!.meshId;
+
     return Scaffold(
       backgroundColor: AppColors.conversationTop,
       appBar: AppBar(
@@ -117,27 +104,37 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Column(
             children: [
               Expanded(
-                child: _thread.isEmpty
-                    ? Center(
+                child: ListenableBuilder(
+                  listenable: MessagesRepository.instance,
+                  builder: (context, _) {
+                    final thread = MessagesRepository.instance.threadWith(
+                      widget.contact.meshId,
+                    );
+
+                    if (thread.isEmpty) {
+                      return Center(
                         child: Text(
                           'No messages yet. Say hello 👋',
                           style: Theme.of(context).textTheme.bodyMedium
                               ?.copyWith(color: Colors.white70),
                         ),
-                      )
-                    : ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.all(20),
-                        itemCount: _thread.length,
-                        itemBuilder: (context, index) {
-                          final message = _thread[index];
-                          return MessageBubble(
-                            text: message.content,
-                            isOutgoing:
-                                message.senderId == MockData.currentUserId,
-                          );
-                        },
-                      ),
+                      );
+                    }
+
+                    return ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(20),
+                      itemCount: thread.length,
+                      itemBuilder: (context, index) {
+                        final message = thread[index];
+                        return MessageBubble(
+                          text: message.content,
+                          isOutgoing: message.senderId == myMeshId,
+                        );
+                      },
+                    );
+                  },
+                ),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -157,7 +154,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           controller: _inputController,
                           style: const TextStyle(color: Colors.white),
                           decoration: const InputDecoration(
-                            hintText: 'Message (mock, no network yet)',
+                            hintText: 'Message',
                             hintStyle: TextStyle(color: Colors.white54),
                             border: InputBorder.none,
                             filled: false,

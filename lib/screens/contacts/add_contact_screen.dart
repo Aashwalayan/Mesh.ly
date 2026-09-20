@@ -15,6 +15,7 @@ import '../../services/service_locator.dart';
 import '../../widgets/contact_tile.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/tab_chip.dart';
+import '../../data/identity_repository.dart';
 
 enum AddContactTab { myQr, scanQr, nearby }
 
@@ -161,7 +162,7 @@ class _MyQrTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final user = MockData.currentUser;
+    final user = IdentityRepository.instance.user!;
 
     // What the other phone's camera actually decodes. Kept as plain JSON —
     // human-readable if you print it while debugging, no external schema.
@@ -460,7 +461,7 @@ class _NearbyTabState extends State<_NearbyTab> {
     });
     if (granted) {
       try {
-        await _discovery.start(MockData.currentUser.username);
+        await _discovery.start(IdentityRepository.instance.user!.username);
       } catch (error, stackTrace) {
         // ignore: avoid_print
         print('NearbyTab: discovery failed: $error\n$stackTrace');

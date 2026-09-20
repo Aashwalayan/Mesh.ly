@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_theme.dart';
-import '../../data/mock_data.dart';
 import '../../widgets/qr_placeholder.dart';
 import '../contacts/add_contact_screen.dart';
 import '../settings/settings_screen.dart';
+import '../../data/identity_repository.dart';
 
 /// The user's own profile: avatar, username, mesh ID, and a QR entry point
 /// for sharing their identity. Editing profile info is intentionally not
@@ -15,7 +15,7 @@ class ProfileScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final user = MockData.currentUser;
+    final user = IdentityRepository.instance.user!;
 
     return SafeArea(
       child: Padding(

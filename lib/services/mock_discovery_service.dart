@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../data/mock_data.dart';
+import '../models/message.dart';
 import 'discovery_service.dart';
 
 /// Frontend-only stand-in for [DiscoveryService]. Emits the existing mock
@@ -16,6 +17,8 @@ class MockDiscoveryService implements DiscoveryService {
       StreamController<(String, PeerConnectionState)>.broadcast();
   final _payloadController =
       StreamController<(String, Uint8List)>.broadcast();
+  final _messageController =
+      StreamController<(String, Message)>.broadcast();
 
   Timer? _emitTimer;
 
@@ -32,6 +35,9 @@ class MockDiscoveryService implements DiscoveryService {
   @override
   Stream<(String, Uint8List)> get onPayloadReceived =>
       _payloadController.stream;
+
+  @override
+  Stream<(String, Message)> get onMessageReceived => _messageController.stream;
 
   @override
   Future<void> start(String myDisplayName) async {
@@ -76,11 +82,21 @@ class MockDiscoveryService implements DiscoveryService {
   }
 
   @override
+  Future<void> sendTestMessage(
+    String endpointId, {
+    required String senderId,
+    String text = 'Hello from Mesh.ly',
+  }) async {
+    // Keep mock mode transport-free; use the real Nearby service for this.
+  }
+
+  @override
   void dispose() {
     _emitTimer?.cancel();
     _peerFoundController.close();
     _peerLostController.close();
     _connectionStateController.close();
     _payloadController.close();
+    _messageController.close();
   }
 }

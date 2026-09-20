@@ -18,24 +18,50 @@ import 'package:permission_handler/permission_handler.dart';
 class PermissionsService {
   PermissionsService._();
 
-  /// Requests every permission `nearby_connections` can need across the
-  /// Android versions this runs on. Permissions that don't apply to the
-  /// device's current Android version (e.g. BLUETOOTH_SCAN pre-Android 12)
-  /// are simply no-ops — permission_handler handles that internally.
+  /// Requests the runtime permissions needed by Nearby Connections.
+  ///
+  /// `Permission.bluetooth` is deliberately absent: it represents legacy
+  /// `BLUETOOTH`, which is an install-time permission through Android 11 and
+  /// is capped at API 30 in the manifest. Requiring its status on Android 12+
+  /// would always report denied even when the three applicable Nearby Devices
+  /// permissions have been granted.
+  ///
+  /// On older Android releases, permission_handler maps the modern Bluetooth
+  /// entries below to the legacy Bluetooth status; on Android 12+ it requests
+  /// SCAN, ADVERTISE, and CONNECT. It ignores entries not available on the
+  /// device's SDK level.
   static Future<bool> requestAll() async {
     final statuses = await [
       Permission.location,
-      Permission.bluetooth,
       Permission.bluetoothAdvertise,
       Permission.bluetoothConnect,
       Permission.bluetoothScan,
       Permission.nearbyWifiDevices,
     ].request();
 
-    // ignore: avoid_print
-    print('PermissionsService: $statuses');
-    return statuses.values.every(
+    final granted = statuses.values.every(
       (status) => status.isGranted || status.isLimited,
     );
+    // ignore: avoid_print
+    print('[Mesh/diag] Runtime permissions: $statuses; allGranted=$granted');
+    await _logServiceStatus();
+    return granted;
+  }
+
+  /// Permissions being granted does not mean the underlying radio or Location
+  /// service is currently switched on. Log both before Nearby is started.
+  static Future<void> _logServiceStatus() async {
+    try {
+      final location = await Permission.location.serviceStatus;
+      final bluetooth = await Permission.bluetooth.serviceStatus;
+      // ignore: avoid_print
+      print(
+        '[Mesh/diag] Service status: location=$location, bluetooth=$bluetooth',
+      );
+    } catch (error) {
+      // Some Android versions do not expose one of these service checks.
+      // ignore: avoid_print
+      print('[Mesh/diag] Could not read radio/service status: $error');
+    }
   }
 }

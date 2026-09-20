@@ -469,6 +469,20 @@ class _NearbyTabState extends State<_NearbyTab> {
     }
   }
 
+  Future<void> _sendTestMessage(String endpointId) async {
+    try {
+      await _discovery.sendTestMessage(
+        endpointId,
+        senderId: IdentityRepository.instance.user!.meshId,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not send test message: $error')),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _discovery.stop();
@@ -519,7 +533,7 @@ class _NearbyTabState extends State<_NearbyTab> {
           },
           trailing: FilledButton.tonal(
             onPressed: state == _PeerRowState.connected
-                ? null
+                ? () => _sendTestMessage(peer.endpointId)
                 : () => _discovery.connectTo(peer.endpointId),
             style: FilledButton.styleFrom(
               backgroundColor: state == _PeerRowState.connected
@@ -532,7 +546,7 @@ class _NearbyTabState extends State<_NearbyTab> {
             child: Text(switch (state) {
               _PeerRowState.found => 'Add',
               _PeerRowState.connecting => 'Connecting',
-              _PeerRowState.connected => 'Connected',
+              _PeerRowState.connected => 'Send test',
               _PeerRowState.failed => 'Retry',
             }),
           ),

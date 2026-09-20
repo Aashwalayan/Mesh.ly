@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import '../models/message.dart';
+
 /// A peer visible nearby, before or after a connection is established.
 class DiscoveredPeer {
   const DiscoveredPeer({required this.endpointId, required this.name});
@@ -47,6 +49,10 @@ abstract class DiscoveryService {
   /// the Chat screen — that's the next piece to build on top of this.
   Stream<(String endpointId, Uint8List bytes)> get onPayloadReceived;
 
+  /// Emits validated direct-peer messages. Implementations discard invalid
+  /// payloads instead of allowing them to crash the app.
+  Stream<(String endpointId, Message message)> get onMessageReceived;
+
   /// Starts advertising this device AND discovering others at once, using
   /// [myDisplayName] as the name other devices will see.
   Future<void> start(String myDisplayName);
@@ -61,6 +67,13 @@ abstract class DiscoveryService {
   Future<void> disconnect(String endpointId);
 
   Future<void> sendBytes(String endpointId, Uint8List bytes);
+
+  /// Sends one message only to the specified immediately connected peer.
+  Future<void> sendTestMessage(
+    String endpointId, {
+    required String senderId,
+    String text = 'Hello from Mesh.ly',
+  });
 
   /// Releases resources (stream controllers, active endpoints). Call when
   /// the owning screen is disposed.

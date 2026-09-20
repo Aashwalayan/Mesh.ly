@@ -14,9 +14,10 @@ import '../../widgets/user_avatar.dart';
 /// or arrive. Wrapped in a [ListenableBuilder] so an incoming message shows
 /// up here immediately if this screen is already open when it arrives.
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.contact});
+  const ChatScreen({super.key, required this.meshId, this.contact});
 
-  final Contact contact;
+  final String meshId;
+  final Contact? contact;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -37,7 +38,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _inputController.text.trim();
     if (text.isEmpty) return;
 
-    MeshRouter.instance.sendChatMessage(widget.contact.meshId, text);
+    MeshRouter.instance.sendChatMessage(widget.meshId, text);
 
     _inputController.clear();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -64,7 +65,7 @@ class _ChatScreenState extends State<ChatScreen> {
         title: Row(
           children: [
             UserAvatar(
-              name: widget.contact.username,
+              name: widget.contact?.username ?? widget.meshId,
               radius: 18,
               backgroundColor: Colors.white.withValues(alpha: 0.16),
               textColor: Colors.white,
@@ -75,7 +76,7 @@ class _ChatScreenState extends State<ChatScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  widget.contact.username,
+                  widget.contact?.username ?? 'Unknown Mesh Peer',
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w700,
@@ -83,7 +84,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 Text(
-                  widget.contact.meshId,
+                  widget.meshId,
                   style: const TextStyle(color: Colors.white70, fontSize: 12),
                 ),
               ],
@@ -108,7 +109,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   listenable: MessagesRepository.instance,
                   builder: (context, _) {
                     final thread = MessagesRepository.instance.threadWith(
-                      widget.contact.meshId,
+                      widget.meshId,
                     );
 
                     if (thread.isEmpty) {
@@ -130,6 +131,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         return MessageBubble(
                           text: message.content,
                           isOutgoing: message.senderId == myMeshId,
+                          deliveryState: message.deliveryState,
                         );
                       },
                     );

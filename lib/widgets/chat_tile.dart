@@ -14,6 +14,7 @@ class ChatTile extends StatelessWidget {
     required this.isSelected,
     required this.onTap,
     this.unreadCount = 0,
+    this.isUnknownPeer = false,
   });
 
   final String name;
@@ -21,6 +22,7 @@ class ChatTile extends StatelessWidget {
   final String time;
   final bool isSelected;
   final int unreadCount;
+  final bool isUnknownPeer;
   final VoidCallback onTap;
 
   @override
@@ -50,6 +52,16 @@ class ChatTile extends StatelessWidget {
                         color: AppColors.textPrimary,
                       ),
                     ),
+                    if (isUnknownPeer) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'Unknown Mesh Peer',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: AppColors.accentDark,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 4),
                     Text(
                       lastMessage,

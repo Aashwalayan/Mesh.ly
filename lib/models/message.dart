@@ -1,3 +1,8 @@
+/// Local delivery state only. Mesh.ly does not implement end-to-end ACKs yet,
+/// so [sent] means the message was handed to at least one connected neighbor,
+/// not that its final recipient confirmed delivery.
+enum MessageDeliveryState { sending, sent, received }
+
 /// A single chat message.
 ///
 /// This model also provides the minimal envelope used for direct Nearby
@@ -14,6 +19,7 @@ class Message {
     required this.timestamp,
     this.isRead = false,
     this.type = chatMessageType,
+    this.deliveryState = MessageDeliveryState.received,
   });
 
   final String id;
@@ -23,6 +29,7 @@ class Message {
   final DateTime timestamp;
   bool isRead;
   final String type;
+  MessageDeliveryState deliveryState;
 
   Map<String, String> toTestEnvelope() => {
     'type': testMessageType,

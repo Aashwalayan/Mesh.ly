@@ -49,6 +49,13 @@ class _ChatsScreenState extends State<ChatsScreen> {
         .toList();
   }
 
+  bool _matchesQuery(String meshId, String? username) {
+    final query = _query.trim().toLowerCase();
+    return query.isEmpty ||
+        meshId.toLowerCase().contains(query) ||
+        (username?.toLowerCase().contains(query) ?? false);
+  }
+
   /// Builds a "last message + unread count" preview for a contact from
   /// their real message thread, keyed by Mesh ID (see MessagesRepository).
   ({String preview, String time, int unread}) _previewFor(Contact contact) {
@@ -140,9 +147,19 @@ class _ChatsScreenState extends State<ChatsScreen> {
                   MessagesRepository.instance,
                 ]),
                 builder: (context, _) {
-                  final contacts = _filter(ContactsRepository.instance.contacts);
+                  final allContacts = ContactsRepository.instance.contacts;
+                  final contacts = _filter(allContacts);
+                  final savedMeshIds = allContacts
+                      .map((contact) => contact.meshId)
+                      .toSet();
+                  final unknownMeshIds = MessagesRepository.instance
+                      .conversationMeshIds
+                      .where((meshId) =>
+                          !savedMeshIds.contains(meshId) &&
+                          _matchesQuery(meshId, null))
+                      .toList();
 
-                  if (contacts.isEmpty) {
+                  if (contacts.isEmpty && unknownMeshIds.isEmpty) {
                     return const EmptyState(
                       message: 'No contacts match your search.',
                     );
@@ -150,21 +167,31 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
                   return ListView.separated(
                     padding: const EdgeInsets.only(bottom: 20),
-                    itemCount: contacts.length,
+                    itemCount: contacts.length + unknownMeshIds.length,
                     separatorBuilder: (_, i) => const SizedBox(height: 8),
                     itemBuilder: (context, index) {
-                      final contact = contacts[index];
-                      final preview = _previewFor(contact);
+                      final isUnknownPeer = index >= contacts.length;
+                      final meshId = isUnknownPeer
+                          ? unknownMeshIds[index - contacts.length]
+                          : contacts[index].meshId;
+                      final contact = isUnknownPeer ? null : contacts[index];
+                      final preview = isUnknownPeer
+                          ? _previewForMeshId(meshId)
+                          : _previewFor(contact!);
 
                       return ChatTile(
-                        name: contact.username,
+                        name: isUnknownPeer ? meshId : contact!.username,
                         lastMessage: preview.preview,
                         time: preview.time,
                         unreadCount: preview.unread,
+                        isUnknownPeer: isUnknownPeer,
                         isSelected: false,
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (_) => ChatScreen(contact: contact),
+                            builder: (_) => ChatScreen(
+                              meshId: meshId,
+                              contact: contact,
+                            ),
                           ),
                         ),
                       );
@@ -177,5 +204,13 @@ class _ChatsScreenState extends State<ChatsScreen> {
         ),
       ),
     );
+  }
+
+  ({String preview, String time, int unread}) _previewForMeshId(String meshId) {
+    final thread = MessagesRepository.instance.threadWith(meshId);
+    if (thread.isEmpty) return (preview: 'No messages yet', time: '', unread: 0);
+    final last = thread.last;
+    final unread = thread.where((message) => !message.isRead).length;
+    return (preview: last.content, time: _formatTime(last), unread: unread);
   }
 }

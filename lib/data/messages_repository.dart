@@ -18,6 +18,10 @@ class MessagesRepository extends ChangeNotifier {
   List<Message> threadWith(String meshId) =>
       List.unmodifiable(_threads[meshId] ?? const []);
 
+  /// Mesh IDs with messages, including peers the user has not saved as a
+  /// contact. The repository is the inbox; Contacts remain an address book.
+  List<String> get conversationMeshIds => List.unmodifiable(_threads.keys);
+
   void _append(String meshId, Message message) {
     _threads.putIfAbsent(meshId, () => []).add(message);
     notifyListeners();
@@ -33,5 +37,18 @@ class MessagesRepository extends ChangeNotifier {
   /// from — it could have been relayed).
   void recordIncoming(String senderMeshId, Message message) {
     _append(senderMeshId, message);
+  }
+
+  void markOutgoingSent(String messageId) {
+    for (final thread in _threads.values) {
+      for (final message in thread) {
+        if (message.id == messageId &&
+            message.deliveryState == MessageDeliveryState.sending) {
+          message.deliveryState = MessageDeliveryState.sent;
+          notifyListeners();
+          return;
+        }
+      }
+    }
   }
 }

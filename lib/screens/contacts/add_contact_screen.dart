@@ -9,9 +9,10 @@ import '../../app/theme/app_theme.dart';
 import '../../data/contacts_repository.dart';
 import '../../data/identity_repository.dart';
 import '../../models/contact.dart';
+import '../../models/contact_identity.dart';
+import '../../services/identity_key_service.dart';
 import '../../services/discovery_service.dart';
 import '../../services/mesh_router.dart';
-import '../../widgets/contact_tile.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/tab_chip.dart';
 
@@ -157,20 +158,21 @@ class _AddContactContentState extends State<AddContactContent> {
 class _MyQrTab extends StatelessWidget {
   const _MyQrTab();
 
+  Future<String> _payload() async {
+    final user = IdentityRepository.instance.user!;
+    final card =
+        await IdentityKeyService.instance.createSignedCard(user.username);
+    return jsonEncode(card.toJson());
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final user = IdentityRepository.instance.user!;
 
-    // What the other phone's camera actually decodes. Kept as plain JSON —
-    // human-readable if you print it while debugging, no external schema.
-    // NOTE: this is still just a claimed identity, not a verified one —
-    // there's no signing/crypto here, matching where the rest of the app
-    // is at (see lib/services/README.md).
-    final payload = jsonEncode({
-      'username': user.username,
-      'meshId': user.meshId,
-    });
+    // The card carries a signed public key and a Mesh ID derived from it.
+    // It is self-consistent, but physical QR scanning is still the user's
+    // out-of-band confirmation of who presented the device.
 
     return SingleChildScrollView(
       key: const ValueKey('my-qr-tab'),
@@ -192,11 +194,15 @@ class _MyQrTab extends StatelessWidget {
                 ),
               ],
             ),
-            child: QrImageView(
-              data: payload,
-              version: QrVersions.auto,
-              size: 188,
-              backgroundColor: Colors.white,
+            child: FutureBuilder<String>(
+              future: _payload(),
+              builder: (context, snapshot) => snapshot.hasData
+                  ? QrImageView(
+                      data: snapshot.data!,
+                      version: QrVersions.auto,
+                      size: 188,
+                      backgroundColor: Colors.white)
+                  : const Center(child: CircularProgressIndicator()),
             ),
           ),
           const SizedBox(height: 18),
@@ -248,6 +254,7 @@ class _ScanQrTabState extends State<_ScanQrTab> {
 
   Contact? _scannedContact;
   String? _error;
+  bool _handling = false;
 
   @override
   void dispose() {
@@ -255,38 +262,49 @@ class _ScanQrTabState extends State<_ScanQrTab> {
     super.dispose();
   }
 
-  void _handleDetect(BarcodeCapture capture) {
-    if (_scannedContact != null) return; // already handled a scan
+  Future<void> _handleDetect(BarcodeCapture capture) async {
+    if (_scannedContact != null || _handling) return;
+    _handling = true;
 
-    final raw = capture.barcodes.isEmpty
-        ? null
-        : capture.barcodes.first.rawValue;
-    if (raw == null) return;
+    final raw =
+        capture.barcodes.isEmpty ? null : capture.barcodes.first.rawValue;
+    if (raw == null) {
+      _handling = false;
+      return;
+    }
 
     try {
-      final data = jsonDecode(raw) as Map<String, dynamic>;
-      final username = data['username'] as String?;
-      final meshId = data['meshId'] as String?;
-      if (username == null || username.isEmpty || meshId == null || meshId.isEmpty) {
-        throw const FormatException('Missing username/meshId');
+      final identity = await ContactIdentity.tryParseAndVerify(raw);
+      if (identity == null ||
+          identity.meshId == IdentityRepository.instance.user!.meshId) {
+        throw const FormatException('Invalid signed card');
       }
 
       final contact = Contact(
-        id: meshId,
-        username: username,
-        meshId: meshId,
+        id: identity.meshId,
+        username: identity.username,
+        meshId: identity.meshId,
+        publicKey: identity.publicKey,
         lastSeen: 'Added via QR',
       );
-      ContactsRepository.instance.addOrUpdate(contact);
+      final result = await ContactsRepository.instance.add(contact);
+      if (result == ContactAddResult.keyMismatch) {
+        throw const FormatException('A saved key does not match');
+      }
       _controller.stop();
+      if (!mounted) return;
       setState(() {
         _scannedContact = contact;
         _error = null;
       });
     } catch (_) {
+      if (!mounted) return;
       setState(() {
-        _error = "That doesn't look like a Mesh.ly QR code.";
+        _error =
+            "This QR is invalid or its key doesn't match the saved contact.";
       });
+    } finally {
+      _handling = false;
     }
   }
 
@@ -460,6 +478,7 @@ class _NearbyTab extends StatelessWidget {
           itemBuilder: (context, index) {
             final peer = peers.values.elementAt(index);
             final state = peerStates[peer.endpointId];
+            final identity = router.identityForEndpoint(peer.endpointId);
 
             return Container(
               padding: const EdgeInsets.all(16),
@@ -479,7 +498,7 @@ class _NearbyTab extends StatelessWidget {
                       color: AppColors.accentSoft,
                       borderRadius: BorderRadius.circular(14),
                     ),
-                    child: Icon(
+                    child: const Icon(
                       Icons.devices_rounded,
                       color: AppColors.accentDark,
                     ),
@@ -490,16 +509,14 @@ class _NearbyTab extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          peer.name,
+                          identity?.username ?? peer.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleMedium
-                              ?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.textPrimary,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.textPrimary,
+                                  ),
                         ),
                         const SizedBox(height: 6),
                         Row(
@@ -521,9 +538,52 @@ class _NearbyTab extends StatelessWidget {
                             ),
                           ],
                         ),
+                        if (identity != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            identity.meshId,
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: AppColors.textSecondary,
+                                    ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
+                  if (identity != null &&
+                      state == PeerConnectionState.connected)
+                    IconButton(
+                      tooltip: 'Add signed identity',
+                      icon: const Icon(Icons.person_add_alt_1_rounded),
+                      onPressed: () async {
+                        final result =
+                            await ContactsRepository.instance.add(Contact(
+                          id: identity.meshId,
+                          username: identity.username,
+                          meshId: identity.meshId,
+                          publicKey: identity.publicKey,
+                          lastSeen: 'Added nearby',
+                        ));
+                        if (!context.mounted) return;
+                        final message = switch (result) {
+                          ContactAddResult.added =>
+                            '${identity.username} added',
+                          ContactAddResult.alreadyKnown =>
+                            '${identity.username} is already a contact',
+                          ContactAddResult.keyMismatch =>
+                            'Security warning: saved key does not match',
+                        };
+                        ScaffoldMessenger.of(context)
+                            .showSnackBar(SnackBar(content: Text(message)));
+                      },
+                    )
+                  else if (state == PeerConnectionState.connected)
+                    const Tooltip(
+                      message: 'Waiting for a signed identity card',
+                      child: Icon(Icons.verified_user_outlined,
+                          color: AppColors.textSecondary),
+                    ),
                 ],
               ),
             );

@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
 import '../data/identity_repository.dart';
 import '../data/messages_repository.dart';
 import '../models/mesh_envelope.dart';
+import '../models/contact_identity.dart';
 import '../models/message.dart';
 import 'discovery_service.dart';
 import 'mesh_envelope_codec.dart';
 import 'permissions_service.dart';
 import 'service_locator.dart';
+import 'identity_key_service.dart';
 
 /// The app-level mesh protocol, sitting above [DiscoveryService] per the
 /// project's architecture doc (Section 17):
@@ -62,6 +65,7 @@ class MeshRouter extends ChangeNotifier {
   /// here because Stage 3 (geographic forwarding) will need to match a
   /// connection back to an identity to attach location data to it.
   final Map<String, String> _endpointToMeshId = {};
+  final Map<String, ContactIdentity> _endpointIdentities = {};
 
   /// messageIds this device has already processed — prevents the same
   /// chat message being re-delivered or re-forwarded if it loops back
@@ -72,6 +76,8 @@ class MeshRouter extends ChangeNotifier {
   Map<String, DiscoveredPeer> get peers => Map.unmodifiable(_peers);
   Map<String, PeerConnectionState> get peerStates =>
       Map.unmodifiable(_peerStates);
+  Map<String, ContactIdentity> get peerIdentities =>
+      Map.unmodifiable(_endpointIdentities);
 
   /// True once this device has exchanged hellos with at least one peer —
   /// i.e. there's a live neighbor it could forward through right now.
@@ -110,7 +116,8 @@ class MeshRouter extends ChangeNotifier {
     _discovery.onPeerFound.listen((peer) {
       final existingState = _peerStates[peer.endpointId];
       _peers[peer.endpointId] = peer;
-      _peerStates.putIfAbsent(peer.endpointId, () => PeerConnectionState.connecting);
+      _peerStates.putIfAbsent(
+          peer.endpointId, () => PeerConnectionState.connecting);
       notifyListeners();
       if (existingState == PeerConnectionState.connecting ||
           existingState == PeerConnectionState.connected) {
@@ -127,6 +134,7 @@ class MeshRouter extends ChangeNotifier {
       _peers.remove(endpointId);
       _peerStates.remove(endpointId);
       _endpointToMeshId.remove(endpointId);
+      _endpointIdentities.remove(endpointId);
       notifyListeners();
     });
 
@@ -146,6 +154,7 @@ class MeshRouter extends ChangeNotifier {
               : 'PEER_FAILED endpoint=$endpointId',
         );
         _endpointToMeshId.remove(endpointId);
+        _endpointIdentities.remove(endpointId);
       }
     });
 
@@ -156,19 +165,21 @@ class MeshRouter extends ChangeNotifier {
         _log('DROP_MALFORMED from=$endpointId');
         return;
       }
-      _handleEnvelope(endpointId, envelope);
+      unawaited(_handleEnvelope(endpointId, envelope));
     });
   }
 
   Future<void> _sendHello(String endpointId) async {
     final identity = IdentityRepository.instance.user!;
+    final card =
+        await IdentityKeyService.instance.createSignedCard(identity.username);
     final hello = MeshEnvelope(
       messageId: _randomId(),
       origin: identity.meshId,
       destination: '',
       ttl: 1,
       type: MeshEnvelope.helloType,
-      payload: identity.username,
+      payload: jsonEncode(card.toJson()),
     );
     try {
       await _discovery.sendBytes(endpointId, MeshEnvelopeCodec.encode(hello));
@@ -177,7 +188,8 @@ class MeshRouter extends ChangeNotifier {
     }
   }
 
-  void _handleEnvelope(String fromEndpointId, MeshEnvelope envelope) {
+  Future<void> _handleEnvelope(
+      String fromEndpointId, MeshEnvelope envelope) async {
     final myMeshId = IdentityRepository.instance.user!.meshId;
     _log(
       'RECEIVE id=${envelope.messageId} origin=${envelope.origin} '
@@ -185,7 +197,13 @@ class MeshRouter extends ChangeNotifier {
       'from=$fromEndpointId ttl=${envelope.ttl}',
     );
     if (envelope.type == MeshEnvelope.helloType) {
-      _endpointToMeshId[fromEndpointId] = envelope.origin;
+      final card = await ContactIdentity.tryParseAndVerify(envelope.payload);
+      if (card == null || card.meshId != envelope.origin) {
+        _log('DROP_INVALID_HELLO from=$fromEndpointId');
+        return;
+      }
+      _endpointToMeshId[fromEndpointId] = card.meshId;
+      _endpointIdentities[fromEndpointId] = card;
       notifyListeners();
       return;
     }
@@ -234,15 +252,22 @@ class MeshRouter extends ChangeNotifier {
     }
   }
 
+  /// A signed card learned directly from a connected neighbor. Discovering a
+  /// peer never creates a contact; the caller must request an explicit add.
+  ContactIdentity? identityForEndpoint(String endpointId) =>
+      _endpointIdentities[endpointId];
+
   Future<void> _forward(String endpointId, MeshEnvelope envelope) async {
     try {
-      await _discovery.sendBytes(endpointId, MeshEnvelopeCodec.encode(envelope));
+      await _discovery.sendBytes(
+          endpointId, MeshEnvelopeCodec.encode(envelope));
       _log(
         'FORWARD id=${envelope.messageId} origin=${envelope.origin} '
         'destination=${envelope.destination} to=$endpointId ttl=${envelope.ttl}',
       );
     } catch (error) {
-      _log('FORWARD_FAILED id=${envelope.messageId} to=$endpointId error=$error');
+      _log(
+          'FORWARD_FAILED id=${envelope.messageId} to=$endpointId error=$error');
     }
   }
 
@@ -279,7 +304,8 @@ class MeshRouter extends ChangeNotifier {
     );
 
     if (!_started) {
-      _log('SEND_QUEUED id=$messageId destination=$destinationMeshId reason=router_not_started');
+      _log(
+          'SEND_QUEUED id=$messageId destination=$destinationMeshId reason=router_not_started');
       return;
     }
 

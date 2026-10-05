@@ -65,9 +65,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
     }
 
     final last = thread.last;
-    final unread = thread
-        .where((m) => m.senderId == contact.meshId && !m.isRead)
-        .length;
+    final unread =
+        thread.where((m) => m.senderId == contact.meshId && !m.isRead).length;
 
     return (preview: last.content, time: _formatTime(last), unread: unread);
   }
@@ -104,18 +103,20 @@ class _ChatsScreenState extends State<ChatsScreen> {
                     children: [
                       Text(
                         'Mesh.ly',
-                        style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.textHeading,
-                            ),
+                        style:
+                            Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.textHeading,
+                                ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         'Offline-ready conversations',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
                             ?.copyWith(color: AppColors.textSecondary),
                       ),
                     ],
@@ -149,11 +150,10 @@ class _ChatsScreenState extends State<ChatsScreen> {
                 builder: (context, _) {
                   final allContacts = ContactsRepository.instance.contacts;
                   final contacts = _filter(allContacts);
-                  final savedMeshIds = allContacts
-                      .map((contact) => contact.meshId)
-                      .toSet();
-                  final unknownMeshIds = MessagesRepository.instance
-                      .conversationMeshIds
+                  final savedMeshIds =
+                      allContacts.map((contact) => contact.meshId).toSet();
+                  final unknownMeshIds = MessagesRepository
+                      .instance.conversationMeshIds
                       .where((meshId) =>
                           !savedMeshIds.contains(meshId) &&
                           _matchesQuery(meshId, null))
@@ -208,7 +208,8 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
   ({String preview, String time, int unread}) _previewForMeshId(String meshId) {
     final thread = MessagesRepository.instance.threadWith(meshId);
-    if (thread.isEmpty) return (preview: 'No messages yet', time: '', unread: 0);
+    if (thread.isEmpty)
+      return (preview: 'No messages yet', time: '', unread: 0);
     final last = thread.last;
     final unread = thread.where((message) => !message.isRead).length;
     return (preview: last.content, time: _formatTime(last), unread: unread);

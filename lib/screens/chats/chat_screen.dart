@@ -116,7 +116,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       return Center(
                         child: Text(
                           'No messages yet. Say hello 👋',
-                          style: Theme.of(context).textTheme.bodyMedium
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
                               ?.copyWith(color: Colors.white70),
                         ),
                       );

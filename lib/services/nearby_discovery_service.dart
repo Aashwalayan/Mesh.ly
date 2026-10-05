@@ -3,9 +3,7 @@ import 'dart:typed_data';
 
 import 'package:nearby_connections/nearby_connections.dart';
 
-import '../models/message.dart';
 import 'discovery_service.dart';
-import 'mesh_message_codec.dart';
 
 /// Real Android implementation of [DiscoveryService], built directly on
 /// Google's Nearby Connections API via the `nearby_connections` plugin
@@ -44,8 +42,6 @@ class NearbyDiscoveryService implements DiscoveryService {
   final _connectionStateController =
       StreamController<(String, PeerConnectionState)>.broadcast();
   final _payloadController = StreamController<(String, Uint8List)>.broadcast();
-  final _messageController =
-      StreamController<(String, Message)>.broadcast();
 
   @override
   Stream<DiscoveredPeer> get onPeerFound => _peerFoundController.stream;
@@ -60,9 +56,6 @@ class NearbyDiscoveryService implements DiscoveryService {
   @override
   Stream<(String, Uint8List)> get onPayloadReceived =>
       _payloadController.stream;
-
-  @override
-  Stream<(String, Message)> get onMessageReceived => _messageController.stream;
 
   @override
   Future<void> start(String myDisplayName) async {
@@ -147,9 +140,11 @@ class NearbyDiscoveryService implements DiscoveryService {
         onDisconnected: _onDisconnected,
       );
       // ignore: avoid_print
-      print('[Mesh/diag] Connection request to $endpointId accepted=$requested');
+      print(
+          '[Mesh/diag] Connection request to $endpointId accepted=$requested');
       if (!requested) {
-        _connectionStateController.add((endpointId, PeerConnectionState.failed));
+        _connectionStateController
+            .add((endpointId, PeerConnectionState.failed));
       }
     } catch (error, stackTrace) {
       // ignore: avoid_print
@@ -162,8 +157,7 @@ class NearbyDiscoveryService implements DiscoveryService {
   void _onConnectionInitiated(String id, ConnectionInfo info) {
     // ignore: avoid_print
     print('[Mesh/diag] Connection initiated (id=$id, '
-        'name=${info.endpointName}, incoming=${info.isIncomingConnection}, '
-        'token=${info.authenticationToken})');
+        'incoming=${info.isIncomingConnection})');
     // Auto-accept: there's no incoming-request UI yet (see class doc).
     Nearby().acceptConnection(
       id,
@@ -171,7 +165,6 @@ class NearbyDiscoveryService implements DiscoveryService {
         if (payload.bytes != null) {
           final bytes = payload.bytes!;
           _payloadController.add((endpointId, bytes));
-          _handleReceivedPayload(endpointId, bytes);
         }
       },
       onPayloadTransferUpdate: (endpointId, update) {
@@ -195,7 +188,8 @@ class NearbyDiscoveryService implements DiscoveryService {
         ? PeerConnectionState.connected
         : PeerConnectionState.failed;
     // ignore: avoid_print
-    print('[Mesh/diag] Connection result for $id: status=$status, state=$state');
+    print(
+        '[Mesh/diag] Connection result for $id: status=$status, state=$state');
     _connectionStateController.add((id, state));
     if (state == PeerConnectionState.connected) {
       // ignore: avoid_print
@@ -222,45 +216,11 @@ class NearbyDiscoveryService implements DiscoveryService {
   }
 
   @override
-  Future<void> sendTestMessage(
-    String endpointId, {
-    required String senderId,
-    String text = 'Hello from Mesh.ly',
-  }) async {
-    final message = Message(
-      id: 'test-${DateTime.now().microsecondsSinceEpoch}',
-      senderId: senderId,
-      receiverId: endpointId,
-      content: text,
-      timestamp: DateTime.now(),
-      type: Message.testMessageType,
-    );
-    // ignore: avoid_print
-    print('[Mesh] Sending message ${message.id}');
-    await sendBytes(endpointId, MeshMessageCodec.encodeTestMessage(message));
-  }
-
-  void _handleReceivedPayload(String endpointId, Uint8List bytes) {
-    // ignore: avoid_print
-    print('[Mesh/diag] Received ${bytes.length} raw bytes from $endpointId');
-    final message = MeshMessageCodec.tryDecodeTestMessage(bytes);
-    if (message == null) {
-      // ignore: avoid_print
-      print('[Mesh] Ignored malformed payload from $endpointId');
-      return;
-    }
-    // ignore: avoid_print
-    print('[Mesh] Received message ${message.id} from $endpointId');
-    _messageController.add((endpointId, message));
-  }
-
-  @override
   void dispose() {
     Nearby().stopAllEndpoints();
     _peerFoundController.close();
     _peerLostController.close();
     _connectionStateController.close();
     _payloadController.close();
-    _messageController.close();
   }
 }

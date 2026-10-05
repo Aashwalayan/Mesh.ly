@@ -32,11 +32,11 @@ class Message {
   MessageDeliveryState deliveryState;
 
   Map<String, String> toTestEnvelope() => {
-    'type': testMessageType,
-    'id': id,
-    'senderId': senderId,
-    'text': content,
-  };
+        'type': testMessageType,
+        'id': id,
+        'senderId': senderId,
+        'text': content,
+      };
 
   /// Returns null for unknown message types or malformed data.
   static Message? fromTestEnvelope(Map<String, dynamic> envelope) {

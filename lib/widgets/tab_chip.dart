@@ -29,9 +29,8 @@ class TabChip extends StatelessWidget {
             child: Text(
               label,
               style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: isSelected
-                        ? Colors.white
-                        : AppColors.accentTabInactive,
+                    color:
+                        isSelected ? Colors.white : AppColors.accentTabInactive,
                     fontWeight: FontWeight.w700,
                   ),
             ),

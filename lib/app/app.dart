@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/identity_repository.dart';
+import '../data/contacts_repository.dart';
 import '../screens/home/home_screen.dart';
 import '../screens/onboarding/onboarding_screen.dart';
 import '../services/mesh_router.dart';
@@ -43,6 +44,7 @@ class _AppStartupGateState extends State<AppStartupGate> {
   void initState() {
     super.initState();
     IdentityRepository.instance.load();
+    ContactsRepository.instance.load();
   }
 
   @override

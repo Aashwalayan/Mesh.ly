@@ -45,24 +45,24 @@ class MeshEnvelope {
 
   /// Returns a copy with [ttl] decremented — used when forwarding.
   MeshEnvelope decremented() => MeshEnvelope(
-    messageId: messageId,
-    origin: origin,
-    destination: destination,
-    ttl: ttl - 1,
-    type: type,
-    payload: payload,
-    timestamp: timestamp,
-  );
+        messageId: messageId,
+        origin: origin,
+        destination: destination,
+        ttl: ttl - 1,
+        type: type,
+        payload: payload,
+        timestamp: timestamp,
+      );
 
   Map<String, dynamic> toJson() => {
-    'messageId': messageId,
-    'origin': origin,
-    'destination': destination,
-    'ttl': ttl,
-    'type': type,
-    'payload': payload,
-    'timestamp': timestamp.millisecondsSinceEpoch,
-  };
+        'messageId': messageId,
+        'origin': origin,
+        'destination': destination,
+        'ttl': ttl,
+        'type': type,
+        'payload': payload,
+        'timestamp': timestamp.millisecondsSinceEpoch,
+      };
 
   /// Returns null for malformed data rather than throwing — a payload from
   /// an untrusted nearby device should never be able to crash the app.
@@ -76,12 +76,23 @@ class MeshEnvelope {
     final timestampMs = json['timestamp'];
 
     if (messageId is! String ||
+        messageId.length > 128 ||
         messageId.isEmpty ||
         origin is! String ||
+        origin.length > 128 ||
         origin.isEmpty ||
         destination is! String ||
+        destination.length > 128 ||
         ttl is! int ||
-        type is! String) {
+        ttl < 0 ||
+        ttl > 20 ||
+        type is! String ||
+        (type != chatType && type != helloType) ||
+        (payload is String && payload.length > 65536)) {
+      return null;
+    }
+    if ((type == helloType && (destination.isNotEmpty || ttl != 1)) ||
+        (type == chatType && (destination.isEmpty || ttl < 1))) {
       return null;
     }
 

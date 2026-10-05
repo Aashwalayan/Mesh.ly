@@ -17,9 +17,8 @@ const String kMeshlyServiceId = 'com.example.minor_app.meshly';
 /// Creates the [DiscoveryService] the app should use, per
 /// [kUseRealNearbyConnections].
 ///
-/// Call this once per screen that needs discovery (e.g. in `initState`),
-/// and call `dispose()` on the result when that screen is disposed —
-/// [DiscoveryService] instances aren't shared/reused across screens yet.
+/// Only [MeshRouter] may call this. It owns the one live transport for the
+/// app session; screens observe the router rather than starting radios.
 DiscoveryService createDiscoveryService() {
   return kUseRealNearbyConnections
       ? NearbyDiscoveryService(serviceId: kMeshlyServiceId)

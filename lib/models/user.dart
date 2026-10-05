@@ -7,11 +7,13 @@ class User {
   const User({
     required this.username,
     required this.meshId,
+    required this.publicKey,
     this.avatar,
   });
 
   final String username;
   final String meshId;
+  final String publicKey;
 
   /// Path/asset for an avatar image. Null falls back to initials in the UI.
   final String? avatar;

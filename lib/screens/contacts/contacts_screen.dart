@@ -58,8 +58,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                 Expanded(
                   child: Text(
                     'Contacts',
-                    style: Theme.of(context).textTheme.headlineSmall
-                        ?.copyWith(
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                           fontWeight: FontWeight.w800,
                           color: AppColors.textHeading,
                         ),
@@ -92,7 +91,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
               child: ListenableBuilder(
                 listenable: ContactsRepository.instance,
                 builder: (context, _) {
-                  final contacts = _filter(ContactsRepository.instance.contacts);
+                  final contacts =
+                      _filter(ContactsRepository.instance.contacts);
 
                   if (contacts.isEmpty) {
                     return const EmptyState(

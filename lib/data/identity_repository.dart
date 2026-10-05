@@ -1,9 +1,8 @@
-import 'dart:math';
-
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/user.dart';
+import '../services/identity_key_service.dart';
 
 /// The local user's identity: a display name they choose once on first
 /// launch, plus a random Mesh ID generated for this install. Persisted
@@ -24,6 +23,7 @@ class IdentityRepository extends ChangeNotifier {
 
   static const _usernameKey = 'identity_username';
   static const _meshIdKey = 'identity_mesh_id';
+  static const _publicKeyKey = 'identity_public_key';
 
   User? _user;
   bool _loaded = false;
@@ -42,9 +42,14 @@ class IdentityRepository extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final username = prefs.getString(_usernameKey);
     final meshId = prefs.getString(_meshIdKey);
+    final publicKey = prefs.getString(_publicKeyKey);
 
-    if (username != null && meshId != null) {
-      _user = User(username: username, meshId: meshId);
+    if (username != null && meshId != null && publicKey != null) {
+      _user = User(username: username, meshId: meshId, publicKey: publicKey);
+    } else if (username != null) {
+      // Secure migration from the old random-ID identity. The Mesh ID changes
+      // because it must now be a fingerprint of an actual public key.
+      await _createForUsername(username, prefs);
     }
 
     _loaded = true;
@@ -54,21 +59,18 @@ class IdentityRepository extends ChangeNotifier {
   /// Creates this install's identity: the given display name, plus a fresh
   /// random Mesh ID, and saves both to disk.
   Future<void> create(String username) async {
-    final meshId = _generateMeshId();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_usernameKey, username);
-    await prefs.setString(_meshIdKey, meshId);
-
-    _user = User(username: username, meshId: meshId);
+    await _createForUsername(username.trim(), prefs);
     notifyListeners();
   }
 
-  /// 8 cryptographically-random bytes, hex-encoded — e.g. "MESH-3F9A21C0B6D4E812".
-  /// Unique per install; not tied to any account or server.
-  String _generateMeshId() {
-    final random = Random.secure();
-    final bytes = List<int>.generate(8, (_) => random.nextInt(256));
-    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return 'MESH-${hex.toUpperCase()}';
+  Future<void> _createForUsername(
+      String username, SharedPreferences prefs) async {
+    final card = await IdentityKeyService.instance.createSignedCard(username);
+    await prefs.setString(_usernameKey, username);
+    await prefs.setString(_meshIdKey, card.meshId);
+    await prefs.setString(_publicKeyKey, card.publicKey);
+    _user = User(
+        username: username, meshId: card.meshId, publicKey: card.publicKey);
   }
 }

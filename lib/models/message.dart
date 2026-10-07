@@ -3,10 +3,7 @@
 /// not that its final recipient confirmed delivery.
 enum MessageDeliveryState { sending, sent, received }
 
-/// A single chat message.
-///
-/// This model also provides the minimal envelope used for direct Nearby
-/// Connections test messages. Routing fields intentionally do not exist yet.
+
 class Message {
   static const chatMessageType = 'chat_message';
   static const testMessageType = 'test_message';

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../../app/theme/app_colors.dart';
 import '../../data/contacts_repository.dart';
 import '../../data/messages_repository.dart';
-import '../../models/contact.dart';
 import '../../models/message.dart';
 import '../../widgets/chat_tile.dart';
 import '../../widgets/empty_state.dart';
@@ -36,39 +35,11 @@ class _ChatsScreenState extends State<ChatsScreen> {
     super.dispose();
   }
 
-  List<Contact> _filter(List<Contact> contacts) {
-    final query = _query.trim().toLowerCase();
-    if (query.isEmpty) return contacts;
-
-    return contacts
-        .where(
-          (contact) =>
-              contact.username.toLowerCase().contains(query) ||
-              contact.meshId.toLowerCase().contains(query),
-        )
-        .toList();
-  }
-
   bool _matchesQuery(String meshId, String? username) {
     final query = _query.trim().toLowerCase();
     return query.isEmpty ||
         meshId.toLowerCase().contains(query) ||
         (username?.toLowerCase().contains(query) ?? false);
-  }
-
-  /// Builds a "last message + unread count" preview for a contact from
-  /// their real message thread, keyed by Mesh ID (see MessagesRepository).
-  ({String preview, String time, int unread}) _previewFor(Contact contact) {
-    final thread = MessagesRepository.instance.threadWith(contact.meshId);
-    if (thread.isEmpty) {
-      return (preview: 'Say hello 👋', time: '', unread: 0);
-    }
-
-    final last = thread.last;
-    final unread =
-        thread.where((m) => m.senderId == contact.meshId && !m.isRead).length;
-
-    return (preview: last.content, time: _formatTime(last), unread: unread);
   }
 
   String _formatTime(Message message) {
@@ -148,43 +119,39 @@ class _ChatsScreenState extends State<ChatsScreen> {
                   MessagesRepository.instance,
                 ]),
                 builder: (context, _) {
-                  final allContacts = ContactsRepository.instance.contacts;
-                  final contacts = _filter(allContacts);
-                  final savedMeshIds =
-                      allContacts.map((contact) => contact.meshId).toSet();
-                  final unknownMeshIds = MessagesRepository
-                      .instance.conversationMeshIds
-                      .where((meshId) =>
-                          !savedMeshIds.contains(meshId) &&
-                          _matchesQuery(meshId, null))
-                      .toList();
+                  final contactsByMeshId = {
+                    for (final contact in ContactsRepository.instance.contacts)
+                      contact.meshId: contact,
+                  };
+                  final conversations =
+                      MessagesRepository.instance.conversationMeshIdsByRecency
+                          .where((meshId) => _matchesQuery(
+                                meshId,
+                                contactsByMeshId[meshId]?.username,
+                              ))
+                          .toList();
 
-                  if (contacts.isEmpty && unknownMeshIds.isEmpty) {
+                  if (conversations.isEmpty) {
                     return const EmptyState(
-                      message: 'No contacts match your search.',
+                      message: 'No conversations yet.',
                     );
                   }
 
                   return ListView.separated(
                     padding: const EdgeInsets.only(bottom: 20),
-                    itemCount: contacts.length + unknownMeshIds.length,
+                    itemCount: conversations.length,
                     separatorBuilder: (_, i) => const SizedBox(height: 8),
                     itemBuilder: (context, index) {
-                      final isUnknownPeer = index >= contacts.length;
-                      final meshId = isUnknownPeer
-                          ? unknownMeshIds[index - contacts.length]
-                          : contacts[index].meshId;
-                      final contact = isUnknownPeer ? null : contacts[index];
-                      final preview = isUnknownPeer
-                          ? _previewForMeshId(meshId)
-                          : _previewFor(contact!);
+                      final meshId = conversations[index];
+                      final contact = contactsByMeshId[meshId];
+                      final preview = _previewForMeshId(meshId);
 
                       return ChatTile(
-                        name: isUnknownPeer ? meshId : contact!.username,
+                        name: contact?.username ?? meshId,
                         lastMessage: preview.preview,
                         time: preview.time,
                         unreadCount: preview.unread,
-                        isUnknownPeer: isUnknownPeer,
+                        isUnknownPeer: false,
                         isSelected: false,
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(
@@ -208,8 +175,9 @@ class _ChatsScreenState extends State<ChatsScreen> {
 
   ({String preview, String time, int unread}) _previewForMeshId(String meshId) {
     final thread = MessagesRepository.instance.threadWith(meshId);
-    if (thread.isEmpty)
-      return (preview: 'No messages yet', time: '', unread: 0);
+    if (thread.isEmpty) {
+      return (preview: '', time: '', unread: 0);
+    }
     final last = thread.last;
     final unread = thread.where((message) => !message.isRead).length;
     return (preview: last.content, time: _formatTime(last), unread: unread);

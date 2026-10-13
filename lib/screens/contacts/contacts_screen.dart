@@ -6,6 +6,7 @@ import '../../widgets/contact_tile.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/mesh_search_field.dart';
 import 'add_contact_screen.dart';
+import '../chats/chat_screen.dart';
 
 /// Dedicated Contacts tab: search + full contact list + add-contact entry
 /// point (as its own screen, separate from the quick-add sheet on Chats).
@@ -108,7 +109,15 @@ class _ContactsScreenState extends State<ContactsScreen> {
                       final contact = contacts[index];
                       return ContactTile(
                         name: contact.username,
-                        subtitle: contact.lastSeen ?? contact.meshId,
+                        subtitle: contact.meshId,
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => ChatScreen(
+                              meshId: contact.meshId,
+                              contact: contact,
+                            ),
+                          ),
+                        ),
                       );
                     },
                   );

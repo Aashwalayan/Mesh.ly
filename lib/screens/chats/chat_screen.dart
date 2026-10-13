@@ -28,6 +28,12 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
 
   @override
+  void initState() {
+    super.initState();
+    MessagesRepository.instance.markThreadRead(widget.meshId);
+  }
+
+  @override
   void dispose() {
     _inputController.dispose();
     _scrollController.dispose();
@@ -111,18 +117,6 @@ class _ChatScreenState extends State<ChatScreen> {
                     final thread = MessagesRepository.instance.threadWith(
                       widget.meshId,
                     );
-
-                    if (thread.isEmpty) {
-                      return Center(
-                        child: Text(
-                          'No messages yet. Say hello 👋',
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodyMedium
-                              ?.copyWith(color: Colors.white70),
-                        ),
-                      );
-                    }
 
                     return ListView.builder(
                       controller: _scrollController,

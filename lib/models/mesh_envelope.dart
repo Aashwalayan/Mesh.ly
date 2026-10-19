@@ -1,6 +1,9 @@
-/// The wire-level packet every device forwards, per the mesh protocol
-/// (messageId / origin / destination / ttl / payload — see the project's
-/// architecture doc, Section 6).
+/// The wire-level packet every device forwards.
+///
+/// This is deliberately a transport envelope rather than a second chat
+/// model: [payload] remains the existing direct-chat payload.  The routing
+/// fields are additive, so a directly connected peer uses exactly the same
+/// path as before while future route discovery can use the same codec.
 ///
 /// Distinct from [Message] on purpose: this is what travels between
 /// devices and gets forwarded by strangers' phones that have never heard
@@ -25,7 +28,11 @@ class MeshEnvelope {
     required this.type,
     this.payload = '',
     DateTime? timestamp,
-  }) : timestamp = timestamp ?? DateTime.now();
+    DateTime? expiresAt,
+    this.hopCount = 0,
+  })  : timestamp = timestamp ?? DateTime.now(),
+        expiresAt = expiresAt ??
+            (timestamp ?? DateTime.now()).add(const Duration(minutes: 30));
 
   final String messageId;
 
@@ -43,6 +50,16 @@ class MeshEnvelope {
   final String payload;
   final DateTime timestamp;
 
+  /// Absolute expiry is separate from [ttl].  TTL limits relays; expiry
+  /// limits lifetime even when a message is being retried after a delay.
+  final DateTime expiresAt;
+
+  /// Number of relays already traversed.  [ttl] remains the remaining
+  /// budget for compatibility with the currently deployed direct path.
+  final int hopCount;
+
+  bool get isExpired => !expiresAt.isAfter(DateTime.now().toUtc());
+
   /// Returns a copy with [ttl] decremented — used when forwarding.
   MeshEnvelope decremented() => MeshEnvelope(
         messageId: messageId,
@@ -52,6 +69,8 @@ class MeshEnvelope {
         type: type,
         payload: payload,
         timestamp: timestamp,
+        expiresAt: expiresAt,
+        hopCount: hopCount + 1,
       );
 
   Map<String, dynamic> toJson() => {
@@ -62,6 +81,8 @@ class MeshEnvelope {
         'type': type,
         'payload': payload,
         'timestamp': timestamp.millisecondsSinceEpoch,
+        'expiresAt': expiresAt.millisecondsSinceEpoch,
+        'hopCount': hopCount,
       };
 
   /// Returns null for malformed data rather than throwing — a payload from
@@ -74,6 +95,8 @@ class MeshEnvelope {
     final type = json['type'];
     final payload = json['payload'];
     final timestampMs = json['timestamp'];
+    final expiresAtMs = json['expiresAt'];
+    final hopCount = json['hopCount'];
 
     if (messageId is! String ||
         messageId.length > 128 ||
@@ -88,7 +111,12 @@ class MeshEnvelope {
         ttl > 20 ||
         type is! String ||
         (type != chatType && type != helloType) ||
-        (payload is String && payload.length > 65536)) {
+        payload is! String ||
+        payload.length > 65536 ||
+        timestampMs is! int ||
+        (expiresAtMs != null && expiresAtMs is! int) ||
+        (hopCount != null &&
+            (hopCount is! int || hopCount < 0 || hopCount > 20))) {
       return null;
     }
     if ((type == helloType && (destination.isNotEmpty || ttl != 1)) ||
@@ -96,16 +124,26 @@ class MeshEnvelope {
       return null;
     }
 
+    final timestamp =
+        DateTime.fromMillisecondsSinceEpoch(timestampMs, isUtc: true);
+    // Older direct-chat peers did not send expiry or hop-count fields. Keep
+    // accepting those packets while ensuring newly emitted packets are fully
+    // bounded.
+    final expiresAt = expiresAtMs is int
+        ? DateTime.fromMillisecondsSinceEpoch(expiresAtMs, isUtc: true)
+        : timestamp.add(const Duration(minutes: 30));
+    if (!expiresAt.isAfter(timestamp)) return null;
+
     return MeshEnvelope(
       messageId: messageId,
       origin: origin,
       destination: destination,
       ttl: ttl,
       type: type,
-      payload: payload is String ? payload : '',
-      timestamp: timestampMs is int
-          ? DateTime.fromMillisecondsSinceEpoch(timestampMs)
-          : DateTime.now(),
+      payload: payload,
+      timestamp: timestamp,
+      expiresAt: expiresAt,
+      hopCount: hopCount is int ? hopCount : 0,
     );
   }
 }

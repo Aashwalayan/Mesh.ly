@@ -208,6 +208,14 @@ class MeshRouter extends ChangeNotifier {
       return;
     }
 
+    // An envelope may still have relay budget but no longer be valid. Check
+    // expiry before caching it so a delayed packet cannot occupy the duplicate
+    // cache or be delivered after its promised lifetime.
+    if (envelope.isExpired) {
+      _log('DROP_EXPIRED id=${envelope.messageId} from=$fromEndpointId');
+      return;
+    }
+
     // Duplicate-prevention cache (Section 8) — drop anything already
     // processed instead of re-delivering or re-forwarding it.
     if (_seenMessageIds.contains(envelope.messageId)) {

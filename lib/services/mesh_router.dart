@@ -14,6 +14,8 @@ import 'mesh_envelope_codec.dart';
 import 'permissions_service.dart';
 import 'route_discovery_service.dart';
 import 'route_table.dart';
+import 'recent_id_cache.dart';
+import 'pending_envelope_store.dart';
 import 'service_locator.dart';
 import 'identity_key_service.dart';
 
@@ -52,6 +54,7 @@ class MeshRouter extends ChangeNotifier {
   final RouteTable _routeTable = RouteTable();
   final Map<String, List<MeshEnvelope>> _pendingForRoute = {};
   final Set<String> _discoveryInProgress = {};
+  final PendingEnvelopeStore _pendingStore = PendingEnvelopeStore();
   bool _started = false;
   bool _starting = false;
   bool _configured = false;
@@ -77,7 +80,7 @@ class MeshRouter extends ChangeNotifier {
   /// chat message being re-delivered or re-forwarded if it loops back
   /// (architecture doc, Section 8). Hellos are NOT put in here — a fresh
   /// hello should fire on every new connection.
-  final Set<String> _seenMessageIds = {};
+  final RecentIdCache _seenMessageIds = RecentIdCache();
 
   Map<String, DiscoveredPeer> get peers => Map.unmodifiable(_peers);
   Map<String, PeerConnectionState> get peerStates =>
@@ -104,6 +107,7 @@ class MeshRouter extends ChangeNotifier {
       final identity = IdentityRepository.instance.user!;
       await _discovery.start(identity.username);
       _started = true;
+      await _restorePendingMessages();
       _log('STARTED current=${identity.meshId}');
     } catch (error) {
       _startFailed = true;
@@ -238,11 +242,10 @@ class MeshRouter extends ChangeNotifier {
 
     // Duplicate-prevention cache (Section 8) — drop anything already
     // processed instead of re-delivering or re-forwarding it.
-    if (_seenMessageIds.contains(envelope.messageId)) {
+    if (!_seenMessageIds.recordIfAbsent(envelope.messageId)) {
       _log('DROP_DUPLICATE id=${envelope.messageId} from=$fromEndpointId');
       return;
     }
-    _seenMessageIds.add(envelope.messageId);
 
     if (envelope.type == MeshEnvelope.chatType &&
         envelope.destination == myMeshId) {
@@ -439,6 +442,7 @@ class MeshRouter extends ChangeNotifier {
 
     if (route != null) _routeTable.invalidateDestination(envelope.destination);
     _pendingForRoute.putIfAbsent(envelope.destination, () => []).add(envelope);
+    unawaited(_persistPendingMessages());
     if (_discoveryInProgress.add(envelope.destination)) {
       await discoverRoute(envelope.destination);
     }
@@ -446,12 +450,30 @@ class MeshRouter extends ChangeNotifier {
 
   Future<void> _flushPending(String destinationMeshId) async {
     final pending = _pendingForRoute.remove(destinationMeshId);
+    unawaited(_persistPendingMessages());
     if (pending == null) return;
     for (final envelope in pending) {
       if (envelope.isExpired || envelope.ttl < 1) continue;
       await _forwardOrQueue(envelope);
     }
   }
+
+  Future<void> _restorePendingMessages() async {
+    final pending = await _pendingStore.load();
+    for (final envelope in pending) {
+      _pendingForRoute
+          .putIfAbsent(envelope.destination, () => [])
+          .add(envelope);
+    }
+    for (final destination in _pendingForRoute.keys.toList()) {
+      if (_discoveryInProgress.add(destination)) {
+        unawaited(discoverRoute(destination));
+      }
+    }
+  }
+
+  Future<void> _persistPendingMessages() =>
+      _pendingStore.save(_pendingForRoute.values.expand((items) => items));
 
   /// A signed card learned directly from a connected neighbor. Discovering a
   /// peer never creates a contact; the caller must request an explicit add.
@@ -487,7 +509,7 @@ class MeshRouter extends ChangeNotifier {
     );
 
     // Never re-process our own message if it loops back through the mesh.
-    _seenMessageIds.add(messageId);
+    _seenMessageIds.recordIfAbsent(messageId);
 
     MessagesRepository.instance.recordOutgoing(
       destinationMeshId,

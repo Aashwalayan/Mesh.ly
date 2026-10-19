@@ -13,6 +13,7 @@ import 'discovery_service.dart';
 import 'mesh_envelope_codec.dart';
 import 'permissions_service.dart';
 import 'route_discovery_service.dart';
+import 'route_table.dart';
 import 'service_locator.dart';
 import 'identity_key_service.dart';
 
@@ -48,6 +49,9 @@ class MeshRouter extends ChangeNotifier {
 
   late final DiscoveryService _discovery;
   late final RouteDiscoveryService _routeDiscovery;
+  final RouteTable _routeTable = RouteTable();
+  final Map<String, List<MeshEnvelope>> _pendingForRoute = {};
+  final Set<String> _discoveryInProgress = {};
   bool _started = false;
   bool _starting = false;
   bool _configured = false;
@@ -138,7 +142,8 @@ class MeshRouter extends ChangeNotifier {
       _log('PEER_LOST endpoint=$endpointId');
       _peers.remove(endpointId);
       _peerStates.remove(endpointId);
-      _endpointToMeshId.remove(endpointId);
+      final nodeId = _endpointToMeshId.remove(endpointId);
+      if (nodeId != null) _routeTable.invalidateNextHop(nodeId);
       _endpointIdentities.remove(endpointId);
       notifyListeners();
     });
@@ -158,7 +163,8 @@ class MeshRouter extends ChangeNotifier {
               ? 'PEER_DISCONNECTED endpoint=$endpointId'
               : 'PEER_FAILED endpoint=$endpointId',
         );
-        _endpointToMeshId.remove(endpointId);
+        final nodeId = _endpointToMeshId.remove(endpointId);
+        if (nodeId != null) _routeTable.invalidateNextHop(nodeId);
         _endpointIdentities.remove(endpointId);
       }
     });
@@ -257,15 +263,12 @@ class MeshRouter extends ChangeNotifier {
       );
     }
 
-    // Forward regardless of whether this device was the destination — a
-    // message not addressed here always needs forwarding while TTL allows.
+    // Ordinary chat is unicast through a discovered next hop. It is never
+    // broadcast; when no usable route exists, this node keeps responsibility
+    // in memory and starts bounded route discovery.
     if (envelope.destination != myMeshId && envelope.ttl > 1) {
-      final forwarded = envelope.decremented();
-      for (final endpointId in _peerStates.keys) {
-        if (endpointId == fromEndpointId) continue;
-        if (_peerStates[endpointId] != PeerConnectionState.connected) continue;
-        unawaited(_forward(endpointId, forwarded));
-      }
+      await _forwardOrQueue(envelope.decremented(),
+          fromEndpointId: fromEndpointId);
     } else if (envelope.destination != myMeshId) {
       _log(
         'DROP_TTL id=${envelope.messageId} destination=${envelope.destination} '
@@ -375,6 +378,19 @@ class MeshRouter extends ChangeNotifier {
       _log('DROP_INVALID_DISCOVERY_RESPONSE from=$fromEndpointId');
       return;
     }
+    final nextHopNodeId = _endpointToMeshId[fromEndpointId];
+    if (nextHopNodeId == null) {
+      _log('DROP_DISCOVERY_RESPONSE_UNKNOWN_HOP request=$requestId');
+      return;
+    }
+    // Every relay learns its own forward route to the destination as the
+    // response returns. This stores only a next hop, never a global path.
+    _routeTable.install(
+      destinationNodeId: envelope.origin,
+      nextHopNodeId: nextHopNodeId,
+    );
+    _discoveryInProgress.remove(envelope.origin);
+    await _flushPending(envelope.origin);
     if (envelope.destination == IdentityRepository.instance.user!.meshId) {
       _log('DISCOVERY_COMPLETE request=$requestId nextHop=$fromEndpointId');
       return;
@@ -398,6 +414,45 @@ class MeshRouter extends ChangeNotifier {
     return null;
   }
 
+  Future<void> _forwardOrQueue(
+    MeshEnvelope envelope, {
+    String? fromEndpointId,
+  }) async {
+    final route = _routeTable.routeFor(envelope.destination);
+    var nextEndpointId =
+        route == null ? null : _endpointForMeshId(route.nextHopNodeId);
+    // Direct neighbours need no discovery. Route state is still installed so
+    // subsequent messages follow the same unicast code path.
+    nextEndpointId ??= _endpointForMeshId(envelope.destination);
+    if (nextEndpointId != null &&
+        nextEndpointId != fromEndpointId &&
+        _peerStates[nextEndpointId] == PeerConnectionState.connected) {
+      if (route == null) {
+        _routeTable.install(
+          destinationNodeId: envelope.destination,
+          nextHopNodeId: envelope.destination,
+        );
+      }
+      await _forward(nextEndpointId, envelope);
+      return;
+    }
+
+    if (route != null) _routeTable.invalidateDestination(envelope.destination);
+    _pendingForRoute.putIfAbsent(envelope.destination, () => []).add(envelope);
+    if (_discoveryInProgress.add(envelope.destination)) {
+      await discoverRoute(envelope.destination);
+    }
+  }
+
+  Future<void> _flushPending(String destinationMeshId) async {
+    final pending = _pendingForRoute.remove(destinationMeshId);
+    if (pending == null) return;
+    for (final envelope in pending) {
+      if (envelope.isExpired || envelope.ttl < 1) continue;
+      await _forwardOrQueue(envelope);
+    }
+  }
+
   /// A signed card learned directly from a connected neighbor. Discovering a
   /// peer never creates a contact; the caller must request an explicit add.
   ContactIdentity? identityForEndpoint(String endpointId) =>
@@ -417,10 +472,8 @@ class MeshRouter extends ChangeNotifier {
     }
   }
 
-  /// Sends a chat message toward [destinationMeshId]. Floods to every
-  /// currently connected neighbor — if the recipient is a direct neighbor
-  /// it's delivered immediately; otherwise it's up to those neighbors
-  /// (running this same logic) to keep it moving.
+  /// Sends chat toward [destinationMeshId] via one active next hop. Unknown
+  /// destinations are held locally while controlled route discovery runs.
   Future<void> sendChatMessage(String destinationMeshId, String text) async {
     final identity = IdentityRepository.instance.user!;
     final messageId = _randomId();
@@ -455,23 +508,10 @@ class MeshRouter extends ChangeNotifier {
       return;
     }
 
-    final bytes = MeshEnvelopeCodec.encode(envelope);
-    var sentToNeighbor = false;
-    for (final entry in _peerStates.entries) {
-      if (entry.value != PeerConnectionState.connected) continue;
-      try {
-        await _discovery.sendBytes(entry.key, bytes);
-        sentToNeighbor = true;
-        _log(
-          'SEND id=$messageId origin=${identity.meshId} '
-          'destination=$destinationMeshId current=${identity.meshId} '
-          'to=${entry.key} ttl=${envelope.ttl}',
-        );
-      } catch (error) {
-        _log('SEND_FAILED id=$messageId to=${entry.key} error=$error');
-      }
-    }
-    if (sentToNeighbor) {
+    await _forwardOrQueue(envelope);
+    // "sent" still means accepted by the selected next hop. Final delivery
+    // acknowledgements and persistent retries are the next protocol phase.
+    if (_routeTable.routeFor(destinationMeshId) != null) {
       MessagesRepository.instance.markOutgoingSent(messageId);
     }
   }

@@ -218,7 +218,9 @@ class RouteDiscoveryRequest {
           hopLimit is! int ||
           hopCount is! int ||
           createdAt is! int ||
-          expiresAt is! int) return null;
+          expiresAt is! int) {
+        return null;
+      }
       final request = RouteDiscoveryRequest(
         requestId: requestId,
         originNodeId: origin,

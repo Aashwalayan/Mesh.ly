@@ -12,6 +12,7 @@ import '../models/message.dart';
 import 'discovery_service.dart';
 import 'mesh_envelope_codec.dart';
 import 'permissions_service.dart';
+import 'route_discovery_service.dart';
 import 'service_locator.dart';
 import 'identity_key_service.dart';
 
@@ -46,6 +47,7 @@ class MeshRouter extends ChangeNotifier {
   static const int defaultTtl = 20;
 
   late final DiscoveryService _discovery;
+  late final RouteDiscoveryService _routeDiscovery;
   bool _started = false;
   bool _starting = false;
   bool _configured = false;
@@ -112,6 +114,9 @@ class MeshRouter extends ChangeNotifier {
     if (_configured) return;
     _configured = true;
     _discovery = createDiscoveryService();
+    _routeDiscovery = RouteDiscoveryService(
+      localNodeId: IdentityRepository.instance.user!.meshId,
+    );
 
     _discovery.onPeerFound.listen((peer) {
       final existingState = _peerStates[peer.endpointId];
@@ -216,6 +221,15 @@ class MeshRouter extends ChangeNotifier {
       return;
     }
 
+    if (envelope.type == MeshEnvelope.routeDiscoveryType) {
+      await _handleRouteDiscovery(fromEndpointId, envelope);
+      return;
+    }
+    if (envelope.type == MeshEnvelope.routeDiscoveryResponseType) {
+      await _handleRouteDiscoveryResponse(fromEndpointId, envelope);
+      return;
+    }
+
     // Duplicate-prevention cache (Section 8) — drop anything already
     // processed instead of re-delivering or re-forwarding it.
     if (_seenMessageIds.contains(envelope.messageId)) {
@@ -258,6 +272,130 @@ class MeshRouter extends ChangeNotifier {
         'current=$myMeshId ttl=${envelope.ttl}',
       );
     }
+  }
+
+  /// Starts a bounded, application-level route discovery. Only discovery
+  /// packets are broadcast; ordinary chat forwarding stays on the existing
+  /// path until the next phase introduces active-route unicast.
+  Future<void> discoverRoute(String destinationMeshId) async {
+    if (!_started || destinationMeshId.isEmpty) return;
+    final request = _routeDiscovery.createRequest(
+      requestId: _randomId(),
+      destinationNodeId: destinationMeshId,
+    );
+    final envelope = MeshEnvelope(
+      messageId: _randomId(),
+      origin: request.originNodeId,
+      destination: request.destinationNodeId,
+      ttl: request.hopLimit,
+      type: MeshEnvelope.routeDiscoveryType,
+      payload: request.encode(),
+      timestamp: request.createdAt,
+      expiresAt: request.expiresAt,
+    );
+    for (final entry in _peerStates.entries) {
+      if (entry.value == PeerConnectionState.connected) {
+        await _forward(entry.key, envelope);
+      }
+    }
+  }
+
+  Future<void> _handleRouteDiscovery(
+    String fromEndpointId,
+    MeshEnvelope envelope,
+  ) async {
+    final incomingNodeId = _endpointToMeshId[fromEndpointId];
+    final request = RouteDiscoveryRequest.tryDecode(envelope.payload);
+    if (incomingNodeId == null ||
+        request == null ||
+        request.originNodeId != envelope.origin ||
+        request.destinationNodeId != envelope.destination ||
+        request.hopCount != envelope.hopCount) {
+      _log('DROP_INVALID_DISCOVERY from=$fromEndpointId');
+      return;
+    }
+    final decision = _routeDiscovery.receiveRequest(
+      request: request,
+      incomingNeighborNodeId: incomingNodeId,
+    );
+    if (decision.isDestination) {
+      final response = MeshEnvelope(
+        messageId: _randomId(),
+        origin: IdentityRepository.instance.user!.meshId,
+        destination: request.originNodeId,
+        ttl: request.hopLimit,
+        type: MeshEnvelope.routeDiscoveryResponseType,
+        payload: jsonEncode({'requestId': request.requestId}),
+        timestamp: request.createdAt,
+        expiresAt: request.expiresAt,
+      );
+      await _forward(fromEndpointId, response);
+      _log('DISCOVERY_DESTINATION request=${request.requestId}');
+      return;
+    }
+    final forwarded = decision.forwardedRequest;
+    if (forwarded == null) {
+      _log(
+          'DROP_DISCOVERY request=${request.requestId} reason=${decision.dropReason}');
+      return;
+    }
+    final forwardedEnvelope = MeshEnvelope(
+      messageId: envelope.messageId,
+      origin: envelope.origin,
+      destination: envelope.destination,
+      ttl: envelope.ttl - 1,
+      type: MeshEnvelope.routeDiscoveryType,
+      payload: forwarded.encode(),
+      timestamp: envelope.timestamp,
+      expiresAt: envelope.expiresAt,
+      hopCount: envelope.hopCount + 1,
+    );
+    for (final entry in _peerStates.entries) {
+      if (entry.key != fromEndpointId &&
+          entry.value == PeerConnectionState.connected) {
+        unawaited(_forward(entry.key, forwardedEnvelope));
+      }
+    }
+  }
+
+  Future<void> _handleRouteDiscoveryResponse(
+    String fromEndpointId,
+    MeshEnvelope envelope,
+  ) async {
+    String? requestId;
+    try {
+      final payload = jsonDecode(envelope.payload);
+      if (payload is Map && payload['requestId'] is String) {
+        requestId = payload['requestId'] as String;
+      }
+    } on FormatException {
+      // Invalid input is handled below like any other malformed response.
+    }
+    if (requestId == null) {
+      _log('DROP_INVALID_DISCOVERY_RESPONSE from=$fromEndpointId');
+      return;
+    }
+    if (envelope.destination == IdentityRepository.instance.user!.meshId) {
+      _log('DISCOVERY_COMPLETE request=$requestId nextHop=$fromEndpointId');
+      return;
+    }
+    final previousNodeId = _routeDiscovery.reverseHopFor(requestId);
+    final previousEndpointId =
+        previousNodeId == null ? null : _endpointForMeshId(previousNodeId);
+    if (previousEndpointId == null ||
+        _peerStates[previousEndpointId] != PeerConnectionState.connected ||
+        envelope.ttl <= 1) {
+      _log('DROP_DISCOVERY_RESPONSE request=$requestId');
+      return;
+    }
+    await _forward(previousEndpointId, envelope.decremented());
+  }
+
+  String? _endpointForMeshId(String meshId) {
+    for (final entry in _endpointToMeshId.entries) {
+      if (entry.value == meshId) return entry.key;
+    }
+    return null;
   }
 
   /// A signed card learned directly from a connected neighbor. Discovering a

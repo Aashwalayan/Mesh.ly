@@ -20,6 +20,13 @@ class MeshEnvelope {
   /// connection, not just the first one ever seen).
   static const helloType = 'hello';
 
+  /// A bounded broadcast used only to locate an unknown destination.
+  static const routeDiscoveryType = 'route_discovery';
+
+  /// A unicast reply that follows temporary reverse-path state back to the
+  /// node that started [routeDiscoveryType].
+  static const routeDiscoveryResponseType = 'route_discovery_response';
+
   MeshEnvelope({
     required this.messageId,
     required this.origin,
@@ -110,7 +117,10 @@ class MeshEnvelope {
         ttl < 0 ||
         ttl > 20 ||
         type is! String ||
-        (type != chatType && type != helloType) ||
+        (type != chatType &&
+            type != helloType &&
+            type != routeDiscoveryType &&
+            type != routeDiscoveryResponseType) ||
         payload is! String ||
         payload.length > 65536 ||
         timestampMs is! int ||
@@ -120,7 +130,7 @@ class MeshEnvelope {
       return null;
     }
     if ((type == helloType && (destination.isNotEmpty || ttl != 1)) ||
-        (type == chatType && (destination.isEmpty || ttl < 1))) {
+        (type != helloType && (destination.isEmpty || ttl < 1))) {
       return null;
     }
 

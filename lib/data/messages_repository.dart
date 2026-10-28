@@ -23,14 +23,10 @@ class MessagesRepository extends ChangeNotifier {
     return List.unmodifiable(thread);
   }
 
-  /// Mesh IDs with messages, including peers the user has not saved as a
-  /// contact. The repository is the inbox; Contacts remain an address book.
+  
   List<String> get conversationMeshIds => List.unmodifiable(_threads.keys);
 
-  /// Conversations with the most recently active one first. Contacts without
-  /// a real message are deliberately absent: the Chats tab is a history of
-  /// conversations, while the Contacts tab is where a new conversation
-  /// begins.
+  
   List<String> get conversationMeshIdsByRecency {
     final meshIds = _threads.keys.toList();
     meshIds.sort((a, b) {
